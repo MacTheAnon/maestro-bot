@@ -4,12 +4,18 @@ import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
+# --- 🧠 IMPORT KNOWLEDGE BASE ---
+# This tries to import your notes. If the file is missing, it won't crash.
+try:
+    from knowledge import COURSE_NOTES
+except ImportError:
+    COURSE_NOTES = "No specific course notes loaded yet."
+
 # --- 🔐 CONFIGURATION ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# --- 🌐 FAKE WEB SERVER (The Fix) ---
-# This keeps Render happy by listening on the specific port it assigns
+# --- 🌐 FAKE WEB SERVER (Render Fix) ---
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -17,27 +23,37 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Maestro Bot is breathing!")
 
 def run_server():
-    # CRITICAL FIX: Get the PORT from Render, or use 8080 if running locally
     port = int(os.environ.get("PORT", 8080))
-    
-    print(f"ðŸŒ Starting web server on port {port}...") # Log this so we can see it
+    print(f"ðŸŒ Starting web server on port {port}...")
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
     server.serve_forever()
 
-# Start the web server in a background thread BEFORE the bot starts
 threading.Thread(target=run_server, daemon=True).start()
 
-# --- 🧠 PERSONA & BOT SETUP ---
-SYSTEM_PROMPT = """
+# --- 🧠 PERSONA SETUP ---
+SYSTEM_PROMPT = f"""
 You are the official AI Mentor for the Maestro Feb '26 AI Software Engineering Cohort.
-Your name is "Maestro Bot". 
-You are a professional in python,c++, C#, and every othe language model including but not limited to , react, js ,ts, html, css and you will generate the codes , all while teaching why, how ,and coming up with study plans!
-You also have the professor mentality, you are a server mod so you will help automate the server better!
-Guide students like a Senior Developer:
-1. Explain *why* code is broken.
-2. Give hints, not just answers.
-3. Be professional but fun (use emojis).
-You are also a cybersecurity professional, you can also use the internet to research 
+Your name is "Maestro Bot".
+
+--- YOUR KNOWLEDGE BASE ---
+Use the following course notes to answer specific questions about the curriculum or rules.
+If the answer is in these notes, prioritise it.
+{COURSE_NOTES}
+---------------------------
+
+YOUR PERSONA:
+1. You are a professional in Python, C++, C#, React, JS, TS, HTML, CSS.
+2. You are a Cybersecurity Professional.
+3. You have a "Professor Mentality" -- explain WHY and HOW, don't just solve.
+4. You are a Server Mod -- help automate and keep order.
+
+INSTRUCTIONS:
+- Guide students like a Senior Developer.
+- Explain *why* code is broken.
+- Give hints, not just answers.
+- Create study plans when asked.
+- Be professional but fun (use emojis).
+- You can use your internal knowledge to research topics.
 """
 
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -71,7 +87,5 @@ async def on_message(message):
             except Exception as e:
                 await message.channel.send(f"❌ Error: {e}")
 
-# Run the bot
 if __name__ == "__main__":
-
     client.run(DISCORD_TOKEN)
