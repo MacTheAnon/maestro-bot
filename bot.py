@@ -212,10 +212,44 @@ async def on_message(message):
         role_name = "Python Learner"
         guild = message.guild
         role = discord.utils.get(guild.roles, name=role_name)
+        # Create the role if it doesn't exist
         if not role:
-            role = await guild.create_role(name=role_name)
-        await message.author.add_roles(role)
-        await message.channel.send(f"🏅 {message.author.mention} earned the **{role_name}** badge!")
+            try:
+                role = await guild.create_role(
+                    name=role_name, 
+                    color=discord.Color.gold(), 
+                    hoist=True
+                )
+            except Exception as e:
+                await message.channel.send("❌ Could not create the badge role. Please contact an admin.")
+                print(f"❌ Could not create role: {e}")
+
+        if role and role not in message.author.roles:
+            await message.author.add_roles(role)
+            embed = discord.Embed(
+                title="Achievement Unlocked!",
+                description=f"{message.author.mention} has officially earned the **{role_name}** badge! 🐍✨",
+                color=discord.Color.gold()
+            )
+            embed.set_thumbnail(url="https://i.imgur.com/Bf1o67I.png") # Python badge icon
+            await message.channel.send(embed=embed)
+        elif role:
+            await message.channel.send(f"{message.author.mention}, you already have the **{role_name}** badge! 🥇")
+        return
+
+    if content.lower() == "!dev":
+        embed = discord.Embed(
+            title="About the Developer",
+            description=(
+                "Hi, I'm **Kaleb McIntosh**, one of your February cohorts!\n\n"
+                "I'm grateful for everyone in this community and eager to help 🎉\n\n"
+                "[🌐 My Portfolio](https://www.kalebmcintosh.com)\n"
+                "[💻 McIntosh Digital](https://www.mcintoshdigital.com)"
+            ),
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="Let’s code and grow together! 🚀")
+        await message.channel.send(embed=embed)
         return
 
     if content.lower().startswith("!review "):
@@ -316,6 +350,7 @@ async def on_message(message):
             "`!studygroup` — Start a private study group",
             "`!yt <topic>` — Find a useful YouTube video",
             "`!earn` — Get a learning badge",
+            "`!dev` — About the developer",
         ]
         admin_commands = [
             "`!setup_py101` — Full course environment setup",
