@@ -94,8 +94,7 @@ RULES:
 3.Use "@everyone" for default role.
 """
 
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash-latest")
+model = genai.GenerativeModel("gemini-1.5-flash-latest", api_key=GOOGLE_API_KEY)
 client_openai = openai.OpenAI(api_key=OPENAI_API_KEY)
 client_groq = Groq(api_key=GROQ_API_KEY)
 
@@ -639,4 +638,5 @@ async def on_message(message):
 
 if __name__ == "__main__":
     client.run(DISCORD_TOKEN)
+
 
