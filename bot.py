@@ -9,25 +9,19 @@ import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# =========================================================
-# 🧠 1. LOAD KNOWLEDGE BASE
-# =========================================================
+# --- 1. LOAD KNOWLEDGE BASE
 try:
     from knowledge import COURSE_NOTES
 except ImportError:
     COURSE_NOTES = "No specific course notes loaded."
 
-# =========================================================
-# 🔐 2. CONFIGURATION
-# =========================================================
+# --- 2. CONFIGURATION
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# =========================================================
-# 🌐 3. FAKE WEB SERVER (Render Fix)
-# =========================================================
+# --- 3. FAKE WEB SERVER
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -39,63 +33,65 @@ def run_server():
     print(f"🌐 Starting web server on port {port}...")
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
     server.serve_forever()
-
 threading.Thread(target=run_server, daemon=True).start()
 
-# =========================================================
-# 🧠 4. PERSONA & UNLIMITED ARCHITECT PROMPT
-# =========================================================
+# --- 4. SYSTEM PROMPT FOR AI
 SYSTEM_PROMPT = f"""
 You are "Maestro Bot", the official AI Mentor & Server Architect.
-
 --- KNOWLEDGE BASE ---
 {COURSE_NOTES}
 ----------------------
-
 YOUR PERSONA:
 1. You are a Expert in Python, Cybersecurity, React, JS.
 2. You have a "Professor Mentality" (Explain WHY, don't just solve).
 3. You are a Server Architect with UNLIMITED creative control.
-
 🚨 SPECIAL ABILITY: GOD MODE (ARCHITECT) 🚨
 If the user asks to modify the server, output a JSON block.
-
 YOU CAN SET PERMISSIONS & USE EMOJIS!
 - "Read Only" = {{"send_messages": false}}
 - "Private" = {{"view_channel": false}}
 - "Admins Only" = {{"view_channel": false}} for @everyone, {{"view_channel": true}} for Admin role.
-
 JSON FORMAT:
 ```json
 {{
   "plan_name": "Brief description",
   "actions": [
     {{
-      "type": "create_category", 
-      "name": "✨ Emojis & Custom Names Allowed ✨",
-      "permissions": {{"@everyone": {{"view_channel": true}}, "Muted": {{"send_messages": false}}}} 
+      "type": "create_role",
+      "name": "Role Name",
+      "color": "#FF0000"
     }},
     {{
-      "type": "create_text", 
-      "name": "channel-name", 
+      "type": "create_category",
+      "name": "Category Name",
+      "permissions": {{
+        "@everyone": {{"view_channel": false}},
+        "Role Name": {{"view_channel": true}}
+      }}
+    }},
+    {{
+      "type": "create_text",
+      "name": "channel-name",
       "category": "Category Name",
-      "permissions": {{"@everyone": {{"send_messages": false}}}} 
+      "permissions": {{
+        "@everyone": {{"view_channel": false}},
+        "Role Name": {{"view_channel": true}}
+      }},
+      "description": "Blah blah welcome text"
     }},
     {{
-      "type": "delete_channel", "name": "channel-name"
-    }},
-    {{
-      "type": "kick", "user": "username"
+      "type": "reaction_role_message",
+      "channel": "get-roles",
+      "emoji": "🔔",
+      "role": "Role Name",
+      "description": "React below to get access to the private channel!"
     }}
   ]
 }}
 RULES:
-
 1.Output ONLY the JSON block.
-
-2."permissions" is optional.
-
-3.Use "@everyone" to refer to the default role. 
+2."permissions"/"description" optional but best practice.
+3.Use "@everyone" for default role.
 """
 
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -104,7 +100,6 @@ client_openai = openai.OpenAI(api_key=OPENAI_API_KEY)
 client_groq = Groq(api_key=GROQ_API_KEY)
 
 async def generate_response(prompt):
-    """Gemini > OpenAI > Groq: AI fallback strategy."""
     try:
         gemini_response = model.generate_content([
             {"role": "system", "parts": [SYSTEM_PROMPT]},
@@ -139,12 +134,12 @@ async def generate_response(prompt):
                     return "❌ All AI systems are exhausted. Please try again in a few minutes."
         return f"❌ Gemini Error: {e}"
 
-# =========================================================
-# 🤖 5. DISCORD CLIENT SETUP
-# =========================================================
+role_reaction_messages = {}
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.reactions = True
 client = discord.Client(intents=intents)
 
 @client.event
@@ -165,7 +160,106 @@ async def on_member_join(member):
         print(f"⚠️ Role '{role_name}' not found in this server.")
 
 @client.event
+async def on_raw_reaction_add(payload):
+    if payload.user_id == client.user.id:
+        return
+    guild = client.get_guild(payload.guild_id)
+    if not guild:
+        return
+    role_name = role_reaction_messages.get(payload.message_id)
+    if not role_name:
+        channel = guild.get_channel(payload.channel_id)
+        if channel and channel.name == "get-roles":
+            if str(payload.emoji) == "🔔":
+                role = discord.utils.get(guild.roles, name="YouTube Supporter")
+                if role:
+                    member = payload.member or guild.get_member(payload.user_id)
+                    if member and role not in member.roles:
+                        await member.add_roles(role)
+        return
+    role = discord.utils.get(guild.roles, name=role_name)
+    member = payload.member or guild.get_member(payload.user_id)
+    if role and member and role not in member.roles:
+        await member.add_roles(role)
+
+@client.event
+async def on_raw_reaction_remove(payload):
+    guild = client.get_guild(payload.guild_id)
+    if not guild:
+        return
+    role_name = role_reaction_messages.get(payload.message_id)
+    if not role_name:
+        channel = guild.get_channel(payload.channel_id)
+        if channel and channel.name == "get-roles":
+            if str(payload.emoji) == "🔔":
+                role = discord.utils.get(guild.roles, name="YouTube Supporter")
+                if role:
+                    member = guild.get_member(payload.user_id)
+                    if member and role in member.roles:
+                        await member.remove_roles(role)
+        return
+    role = discord.utils.get(guild.roles, name=role_name)
+    member = guild.get_member(payload.user_id)
+    if role and member and role in member.roles:
+        await member.remove_roles(role)
+
+@client.event
 async def on_message(message):
+    if message.author == client.user or message.author.bot:
+        return
+
+    content = message.content.strip()
+
+    # === SMART PRIVATE ROLE & REACTION SYSTEM ===
+    if content.lower().startswith("!setup_private_role"):
+        if not message.author.guild_permissions.administrator:
+            await message.channel.send("⛔ Only admins can use this.")
+            return
+        try:
+            args = content[len("!setup_private_role"):].split('|')
+            if len(args) < 5:
+                await message.channel.send("Usage: !setup_private_role RoleName | Category | channel-name | description | emoji")
+                return
+            role_name = args[0].strip()
+            category_name = args[1].strip()
+            channel_name = args[2].strip()
+            description = args[3].strip()
+            emoji = args[4].strip()
+            guild = message.guild
+            role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                role = await guild.create_role(name=role_name, mentionable=True)
+            category = discord.utils.get(guild.categories, name=category_name)
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                role: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            }
+            if not category:
+                category = await guild.create_category(category_name, overwrites=overwrites)
+            else:
+                await category.edit(overwrites=overwrites)
+            ch = discord.utils.get(guild.text_channels, name=channel_name)
+            if not ch:
+                ch = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+            else:
+                await ch.edit(category=category, overwrites=overwrites)
+            embed = discord.Embed(
+                title=f"Welcome to {role_name} channel!",
+                description=description,
+                color=discord.Color.green()
+            )
+            await ch.send(embed=embed)
+            get_roles_ch = discord.utils.get(guild.text_channels, name="get-roles")
+            if get_roles_ch:
+                opt_in_msg = await get_roles_ch.send(
+                    f"{emoji} **Want to join `{role_name}` and access {ch.mention}?** React with {emoji} to opt-in; remove to opt-out."
+                )
+                await opt_in_msg.add_reaction(emoji)
+                role_reaction_messages[opt_in_msg.id] = role_name
+            await message.channel.send(f"✅ Private role/channel for `{role_name}` live! Opt-in posted in #get-roles.")
+        except Exception as e:
+            await message.channel.send(f"❌ Error: {e}")
+        return
     if message.author == client.user or message.author.bot:
         return
 
@@ -545,3 +639,4 @@ async def on_message(message):
 
 if __name__ == "__main__":
     client.run(DISCORD_TOKEN)
+
