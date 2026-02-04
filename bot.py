@@ -108,7 +108,7 @@ RULES:
 
 # ----- Gemini (generativeai) Model Setup -----
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash-latest", system_instruction=SYSTEM_PROMPT)
+model = genai.GenerativeModel("gemini-flash-latest", system_instruction=SYSTEM_PROMPT)
 client_openai = openai.OpenAI(api_key=OPENAI_API_KEY)
 client_groq = Groq(api_key=GROQ_API_KEY)
 
@@ -725,6 +725,7 @@ async def on_message(message):
 
 if __name__ == "__main__":
     client.run(DISCORD_TOKEN)
+
 
 
 
