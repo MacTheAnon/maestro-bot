@@ -1,5 +1,6 @@
 import discord
 import google.generativeai as genai
+import openai
 import os
 import json
 import asyncio
@@ -96,6 +97,28 @@ RULES:
 
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-flash-latest', system_instruction=SYSTEM_PROMPT)
+client_openai = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+async def generate_response(prompt):
+    """Tries Gemini first, falls back to OpenAI if Quota (429) is hit."""
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        if "429" in str(e):
+            print("⚠️ Gemini Quota Exceeded. Falling back to OpenAI...")
+            try:
+                completion = client_openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                return completion.choices[0].message.content
+            except Exception as e2:
+                return f"❌ Both AI providers are down. Error: {e2}"
+        return f"❌ Gemini Error: {e}"
 
 # =========================================================
 # 🤖 5. DISCORD CLIENT SETUP
@@ -163,8 +186,8 @@ async def on_message(message):
             return
         async with message.channel.typing():
             yt_prompt = f"Find a high-quality, relevant YouTube video link for this topic: {search_query}. Return ONLY the URL."
-            yt_response = model.generate_content(yt_prompt)
-            await message.channel.send(f"🎬 **Maestro's Top Pick for '{search_query}':**\n{yt_response.text}")
+            response_text = await generate_response(yt_prompt)
+            await message.channel.send(f"🎬 **Maestro's Top Pick for '{search_query}':**\n{response_text}")
         return
 
     if content.lower().startswith("!ask "):
@@ -174,16 +197,16 @@ async def on_message(message):
             return
         async with message.channel.typing():
             tutor_prompt = f"Answer as an expert Python tutor, step by step. Student: {question}"
-            answer = model.generate_content(tutor_prompt)
-            await message.channel.send(answer.text[:2000])
+            response_text = await generate_response(tutor_prompt)
+            await message.channel.send(response_text[:2000])
         return
 
     if content.lower().startswith("!flashcard"):
         topic = content[len("!flashcard"):].strip() or "python"
         async with message.channel.typing():
             flashcard_prompt = f"Give me a simple {topic} flashcard: one short question and answer, format:\nQuestion: ...\nAnswer: ...\nDo not show answer immediately."
-            response = model.generate_content(flashcard_prompt)
-            parts = response.text.split("Answer:")
+            response_text = await generate_response(flashcard_prompt)
+            parts = response_text.split("Answer:")
             if len(parts) == 2:
                 try:
                     await message.author.send(f"**Flashcard Question:**\n{parts[0].strip()}\nReply with anything to see the answer.")
@@ -204,8 +227,8 @@ async def on_message(message):
     if content.lower() == "!challenge":
         async with message.channel.typing():
             challenge_prompt = "Give me today's quick Python coding challenge. Keep it under 1 paragraph, beginner friendly. No solution, just the challenge."
-            challenge = model.generate_content(challenge_prompt)
-            await message.channel.send(f"🧩 **Daily Challenge:**\n{challenge.text[:1900]}")
+            response_text = await generate_response(challenge_prompt)
+            await message.channel.send(f"🧩 **Daily Challenge:**\n{response_text[:1900]}")
         return
 
     if content.lower() == "!earn":
@@ -259,8 +282,8 @@ async def on_message(message):
             return
         review_prompt = ("Review the following code, spot mistakes, and give one improvement suggestion. "
                          "Be positive and short. Code:\n" + code)
-        review = model.generate_content(review_prompt)
-        await message.channel.send(f"📝 **Review:**\n{review.text[:1900]}")
+        response_text = await generate_response(review_prompt)
+        await message.channel.send(f"📝 **Review:**\n{response_text[:1900]}")
         return
 
     if content.lower().startswith("!resource "):
@@ -269,8 +292,8 @@ async def on_message(message):
             await message.channel.send("Type a topic after `!resource`.")
             return
         resource_prompt = f"Give 2 top beginner-friendly, free resources for learning {topic}. Include links."
-        links = model.generate_content(resource_prompt)
-        await message.channel.send(f"🔗 {links.text[:1900]}")
+        response_text = await generate_response(resource_prompt)
+        await message.channel.send(f"🔗 {response_text[:1900]}")
         return
 
     if content.lower() == "!studygroup":
@@ -369,8 +392,7 @@ async def on_message(message):
         async with message.channel.typing():
             try:
                 prompt = message.content.replace(f'<@{client.user.id}>', '').strip()
-                response = model.generate_content(prompt)
-                response_text = response.text
+                response_text = await generate_response(prompt)
 
                 if "```json" in response_text:
                     if not message.author.guild_permissions.administrator:
