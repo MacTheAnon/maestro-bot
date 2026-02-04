@@ -1,6 +1,7 @@
 import discord
 import google.generativeai as genai
 import openai
+from groq import Groq
 import os
 import json
 import asyncio
@@ -21,6 +22,8 @@ except ImportError:
 # =========================================================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # =========================================================
 # 🌐 3. FAKE WEB SERVER (Render Fix)
@@ -97,16 +100,17 @@ RULES:
 
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-flash-latest', system_instruction=SYSTEM_PROMPT)
-client_openai = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client_openai = openai.OpenAI(api_key=OPENAI_API_KEY)
+client_groq = Groq(api_key=GROQ_API_KEY)
 
 async def generate_response(prompt):
-    """Tries Gemini first, falls back to OpenAI if Quota (429) is hit."""
+    """Gemini > OpenAI > Groq: AI fallback strategy."""
     try:
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
         if "429" in str(e):
-            print("⚠️ Gemini Quota Exceeded. Falling back to OpenAI...")
+            print("⚠️ Gemini out. Trying OpenAI...")
             try:
                 completion = client_openai.chat.completions.create(
                     model="gpt-4o-mini",
@@ -117,7 +121,19 @@ async def generate_response(prompt):
                 )
                 return completion.choices[0].message.content
             except Exception as e2:
-                return f"❌ Both AI providers are down. Error: {e2}"
+                print("⚠️ OpenAI out. Trying Groq...")
+                try:
+                    chat_completion = client_groq.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt}
+                        ],
+                        model="llama3-8b-8192"
+                    )
+                    return chat_completion.choices[0].message.content
+                except Exception as e3:
+                    print("❌ All AI systems exhausted.", e3)
+                    return "❌ All AI systems are exhausted. Please try again in a few minutes."
         return f"❌ Gemini Error: {e}"
 
 # =========================================================
@@ -178,6 +194,62 @@ async def on_message(message):
             await status_msg.edit(content=f"❌ Setup Failed: {e}")
         return
 
+    # --- ADMIN: CREATE ROLE ---
+    if content.lower().startswith("!make_role"):
+        if not message.author.guild_permissions.administrator:
+            await message.channel.send("⛔ Only admins can create roles.")
+            return
+        try:
+            # !make_role Mentor | orange | true
+            parts = content[len("!make_role"):].split("|")
+            name = parts[0].strip()
+            color = discord.Color.default()
+            hoist = False
+
+            if len(parts) > 1 and parts[1].strip():
+                color_str = parts[1].strip()
+                try:
+                    if color_str.startswith("#"):
+                        color = discord.Color(int(color_str.replace("#", ""), 16))
+                    else:
+                        color = getattr(discord.Color, color_str.lower())()
+                except Exception:
+                    pass
+
+            if len(parts) > 2:
+                hoist = parts[2].strip().lower() in ["true", "1", "yes", "y"]
+
+            existing_role = discord.utils.get(message.guild.roles, name=name)
+            if existing_role:
+                await message.channel.send("A role with that name already exists.")
+                return
+            role = await message.guild.create_role(name=name, color=color, hoist=hoist)
+            await message.channel.send(f"✅ Created role **{role.name}**.")
+        except Exception as e:
+            await message.channel.send(f"❌ Could not create role: {e}")
+        return
+
+    # --- ADMIN: POST ANYWHERE ---
+    if content.lower().startswith("!post_in"):
+        if not message.author.guild_permissions.administrator:
+            await message.channel.send("⛔ Only admins can use this feature.")
+            return
+        try:
+            match = re.match(r"!post_in\s+#?([\w\-]+)\s*\|\s*(.+)", content, re.I)
+            if not match:
+                await message.channel.send("Format: `!post_in #channel | Your message here`")
+                return
+            chan_name, msg = match.groups()
+            target_chan = discord.utils.get(message.guild.text_channels, name=chan_name)
+            if not target_chan:
+                await message.channel.send(f"Couldn't find channel: {chan_name}")
+                return
+            await target_chan.send(msg)
+            await message.channel.send(f"✅ Posted in {target_chan.mention}")
+        except Exception as e:
+            await message.channel.send(f"❌ Could not send message: {e}")
+        return
+
     # --- YOUTUBE SEARCH COMMAND ---
     if content.lower().startswith("!yt "):
         search_query = content[4:].strip()
@@ -187,7 +259,10 @@ async def on_message(message):
         async with message.channel.typing():
             yt_prompt = f"Find a high-quality, relevant YouTube video link for this topic: {search_query}. Return ONLY the URL."
             response_text = await generate_response(yt_prompt)
-            await message.channel.send(f"🎬 **Maestro's Top Pick for '{search_query}':**\n{response_text}")
+            if response_text.startswith("❌ All AI systems"):
+                await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
+            else:
+                await message.channel.send(f"🎬 **Maestro's Top Pick for '{search_query}':**\n{response_text}")
         return
 
     if content.lower().startswith("!ask "):
@@ -198,7 +273,10 @@ async def on_message(message):
         async with message.channel.typing():
             tutor_prompt = f"Answer as an expert Python tutor, step by step. Student: {question}"
             response_text = await generate_response(tutor_prompt)
-            await message.channel.send(response_text[:2000])
+            if response_text.startswith("❌ All AI systems"):
+                await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
+            else:
+                await message.channel.send(response_text[:2000])
         return
 
     if content.lower().startswith("!flashcard"):
@@ -206,6 +284,9 @@ async def on_message(message):
         async with message.channel.typing():
             flashcard_prompt = f"Give me a simple {topic} flashcard: one short question and answer, format:\nQuestion: ...\nAnswer: ...\nDo not show answer immediately."
             response_text = await generate_response(flashcard_prompt)
+            if response_text.startswith("❌ All AI systems"):
+                await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
+                return
             parts = response_text.split("Answer:")
             if len(parts) == 2:
                 try:
@@ -228,7 +309,10 @@ async def on_message(message):
         async with message.channel.typing():
             challenge_prompt = "Give me today's quick Python coding challenge. Keep it under 1 paragraph, beginner friendly. No solution, just the challenge."
             response_text = await generate_response(challenge_prompt)
-            await message.channel.send(f"🧩 **Daily Challenge:**\n{response_text[:1900]}")
+            if response_text.startswith("❌ All AI systems"):
+                await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
+            else:
+                await message.channel.send(f"🧩 **Daily Challenge:**\n{response_text[:1900]}")
         return
 
     if content.lower() == "!earn":
@@ -283,7 +367,10 @@ async def on_message(message):
         review_prompt = ("Review the following code, spot mistakes, and give one improvement suggestion. "
                          "Be positive and short. Code:\n" + code)
         response_text = await generate_response(review_prompt)
-        await message.channel.send(f"📝 **Review:**\n{response_text[:1900]}")
+        if response_text.startswith("❌ All AI systems"):
+            await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
+        else:
+            await message.channel.send(f"📝 **Review:**\n{response_text[:1900]}")
         return
 
     if content.lower().startswith("!resource "):
@@ -293,7 +380,10 @@ async def on_message(message):
             return
         resource_prompt = f"Give 2 top beginner-friendly, free resources for learning {topic}. Include links."
         response_text = await generate_response(resource_prompt)
-        await message.channel.send(f"🔗 {response_text[:1900]}")
+        if response_text.startswith("❌ All AI systems"):
+            await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
+        else:
+            await message.channel.send(f"🔗 {response_text[:1900]}")
         return
 
     if content.lower() == "!studygroup":
@@ -377,7 +467,9 @@ async def on_message(message):
         ]
         admin_commands = [
             "`!setup_py101` — Full course environment setup",
-            "`!announce Title | Description` — Post an announcement (admins only)"
+            "`!announce Title | Description` — Post an announcement (admins only)",
+            "`!make_role Name | #color | hoist` — Admin: Create a new role",
+            "`!post_in #channel | message` — Admin: Bot posts in any channel",
         ]
         msg = "**🤖 Maestro Bot Help**\n\n"
         msg += "\n".join(user_commands)
@@ -393,20 +485,19 @@ async def on_message(message):
             try:
                 prompt = message.content.replace(f'<@{client.user.id}>', '').strip()
                 response_text = await generate_response(prompt)
-
+                if response_text.startswith("❌ All AI systems"):
+                    await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
+                    return
                 if "```json" in response_text:
                     if not message.author.guild_permissions.administrator:
                         await message.channel.send("⛔ **Security Alert:** You are not an Admin.")
                         return
-
                     try:
                         json_str = response_text.split("```json")[1].split("```")[0].strip()
                         plan = json.loads(json_str)
                         await message.channel.send(f"🛡️ **Architect Mode:** Executing *{plan['plan_name']}*...")
-
                         guild = message.guild
                         created_categories = {}
-
                         for action in plan['actions']:
                             try:
                                 overwrites = {}
@@ -420,39 +511,32 @@ async def on_message(message):
                                         if target_role:
                                             overwrite = discord.PermissionOverwrite(**perms)
                                             overwrites[target_role] = overwrite
-
                                 if action['type'] == 'create_category':
                                     cat = await guild.create_category(action['name'], overwrites=overwrites)
                                     created_categories[action['name']] = cat
                                     await message.channel.send(f"📂 Created: **{action['name']}**")
-
                                 elif action['type'] == 'create_text':
                                     target_cat = created_categories.get(action.get('category')) or discord.utils.get(guild.categories, name=action.get('category'))
                                     await guild.create_text_channel(action['name'], category=target_cat, overwrites=overwrites)
                                     await message.channel.send(f"💬 Created Text: **{action['name']}**")
-
                                 elif action['type'] == 'delete_channel':
                                     chan = discord.utils.get(guild.channels, name=action['name'])
                                     if chan:
                                         await chan.delete()
                                         await message.channel.send(f"🗑️ Deleted: **{action['name']}**")
-
                                 elif action['type'] == 'kick':
                                     member = discord.utils.get(guild.members, name=action['user'])
                                     if member:
                                         await member.kick(reason="Maestro Bot Admin Action")
                                         await message.channel.send(f"🥾 Kicked: **{member.name}**")
-
                                 await asyncio.sleep(1)
                             except Exception as e:
                                 await message.channel.send(f"⚠️ Action Failed: {e}")
-
                         await message.channel.send("✅ **Execution Complete.**")
                     except json.JSONDecodeError:
                         await message.channel.send("❌ AI JSON Error. Please retry.")
                 else:
                     await message.channel.send(response_text[:2000])
-
             except Exception as e:
                 await message.channel.send(f"❌ Error: {e}")
 
