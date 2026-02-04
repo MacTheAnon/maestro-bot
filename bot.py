@@ -662,15 +662,18 @@ async def on_message(message):
         await message.channel.send(msg)
         return
 
-    # --- AI ARCHITECT (The Unlimited Engine) ---
+        # --- AI ARCHITECT (The Unlimited Engine) ---
     if client.user.mentioned_in(message):
         async with message.channel.typing():
             try:
                 prompt = message.content.replace(f'<@{client.user.id}>', '').strip()
                 response_text = await generate_response(prompt)
                 if response_text.startswith("❌ All AI systems"):
-                    await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
+                    await message.channel.send(
+                        "🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!"
+                    )
                     return
+
                 if "```json" in response_text:
                     if not message.author.guild_permissions.administrator:
                         await message.channel.send("⛔ **Security Alert:** You are not an Admin.")
@@ -694,38 +697,71 @@ async def on_message(message):
                                         if target_role:
                                             overwrite = discord.PermissionOverwrite(**perms)
                                             overwrites[target_role] = overwrite
-                                if action['type'] == 'create_category':
+
+                                if action['type'] == 'create_role':
+                                    color = discord.Color.default()
+                                    if "color" in action:
+                                        color_str = action["color"]
+                                        try:
+                                            if color_str.startswith("#"):
+                                                color = discord.Color(int(color_str.replace("#", ""), 16))
+                                            else:
+                                                color = getattr(discord.Color, color_str.lower())()
+                                        except Exception:
+                                            pass
+                                    existing_role = discord.utils.get(guild.roles, name=action["name"])
+                                    if not existing_role:
+                                        await guild.create_role(name=action["name"], color=color)
+                                        await message.channel.send(f"🎭 Created Role: **{action['name']}**")
+
+                                elif action['type'] == 'create_category':
                                     cat = await guild.create_category(action['name'], overwrites=overwrites)
                                     created_categories[action['name']] = cat
                                     await message.channel.send(f"📂 Created: **{action['name']}**")
+
                                 elif action['type'] == 'create_text':
-                                    target_cat = created_categories.get(action.get('category')) or discord.utils.get(guild.categories, name=action.get('category'))
-                                    await guild.create_text_channel(action['name'], category=target_cat, overwrites=overwrites)
+                                    target_cat = (created_categories.get(action.get('category')) 
+                                                  or discord.utils.get(guild.categories, name=action.get('category')))
+                                    ch = await guild.create_text_channel(action['name'], category=target_cat, overwrites=overwrites)
                                     await message.channel.send(f"💬 Created Text: **{action['name']}**")
+                                    if action.get("description"):
+                                        await ch.send(action["description"])
+
                                 elif action['type'] == 'delete_channel':
                                     chan = discord.utils.get(guild.channels, name=action['name'])
                                     if chan:
                                         await chan.delete()
                                         await message.channel.send(f"🗑️ Deleted: **{action['name']}**")
+
                                 elif action['type'] == 'kick':
                                     member = discord.utils.get(guild.members, name=action['user'])
                                     if member:
                                         await member.kick(reason="Maestro Bot Admin Action")
                                         await message.channel.send(f"🥾 Kicked: **{member.name}**")
+
+                                elif action['type'] == 'reaction_role_message':
+                                    target_channel = discord.utils.get(guild.text_channels, name=action["channel"])
+                                    role_name = action.get("role")
+                                    emoji = action.get("emoji")
+                                    desc = action.get("description", "React to gain access!")
+                                    if target_channel and role_name and emoji:
+                                        msg = await target_channel.send(f"{emoji} {desc}")
+                                        await msg.add_reaction(emoji)
+                                        role_reaction_messages[msg.id] = role_name
+                                        await message.channel.send(
+                                            f"✅ Reaction role for '{role_name}' posted in {target_channel.mention}!"
+                                        )
                                 await asyncio.sleep(1)
+
                             except Exception as e:
                                 await message.channel.send(f"⚠️ Action Failed: {e}")
                         await message.channel.send("✅ **Execution Complete.**")
+
                     except json.JSONDecodeError:
                         await message.channel.send("❌ AI JSON Error. Please retry.")
                 else:
                     await message.channel.send(response_text[:2000])
             except Exception as e:
                 await message.channel.send(f"❌ Error: {e}")
-
 if __name__ == "__main__":
     client.run(DISCORD_TOKEN)
-
-
-
-
