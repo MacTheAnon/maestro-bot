@@ -102,7 +102,20 @@ client = discord.Client(intents=intents)
 @client.event
 async def on_ready():
     print(f'⚡ {client.user} is online! Type "@MaestroBot hello" to test.')
-
+@client.event
+async def on_member_join(member):
+    # Change "Student" to the exact name of the role you want to give
+    role_name = "FebruaryCohort" 
+    role = discord.utils.get(member.guild.roles, name=role_name)
+    
+    if role:
+        try:
+            await member.add_roles(role)
+            print(f"✅ Assigned {role_name} to {member.name}")
+        except Exception as e:
+            print(f"❌ Failed to assign role: {e}")
+    else:
+        print(f"⚠️ Role '{role_name}' not found in this server.")
 @client.event
 async def on_message(message):
     if message.author == client.user:
@@ -230,3 +243,4 @@ async def on_message(message):
 
 if __name__ == "__main__":
     client.run(DISCORD_TOKEN)
+
