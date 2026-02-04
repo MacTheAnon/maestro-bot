@@ -1,5 +1,5 @@
 import discord
-import google.genai as genai
+import google.generativeai as genai
 import openai
 from groq import Groq
 import os
@@ -20,6 +20,18 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# --- DM Opt-in storage ---
+dm_optin_file = "dm_optin.json"
+if os.path.exists(dm_optin_file):
+    with open(dm_optin_file, "r") as f:
+        dm_optin_set = set(json.load(f))
+else:
+    dm_optin_set = set()
+def save_dm_optin():
+    with open(dm_optin_file, "w") as f:
+        json.dump(list(dm_optin_set), f)
+
 
 # --- 3. FAKE WEB SERVER
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -94,16 +106,15 @@ RULES:
 3.Use "@everyone" for default role.
 """
 
-model = genai.GenerativeModel("gemini-1.5-flash-latest", api_key=GOOGLE_API_KEY)
+# ----- Gemini (generativeai) Model Setup -----
+genai.configure(api_key=GOOGLE_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash-latest", system_instruction=SYSTEM_PROMPT)
 client_openai = openai.OpenAI(api_key=OPENAI_API_KEY)
 client_groq = Groq(api_key=GROQ_API_KEY)
 
 async def generate_response(prompt):
     try:
-        gemini_response = model.generate_content([
-            {"role": "system", "parts": [SYSTEM_PROMPT]},
-            {"role": "user", "parts": [prompt]}
-        ])
+        gemini_response = model.generate_content(prompt)
         return gemini_response.text
     except Exception as e:
         if "429" in str(e):
@@ -157,6 +168,17 @@ async def on_member_join(member):
             print(f"❌ Failed to assign role: {e}")
     else:
         print(f"⚠️ Role '{role_name}' not found in this server.")
+    # --- Auto DM on join ---
+    try:
+        welcome_message = (
+            f"👋 Welcome to Maestro, {member.display_name}!\n\n"
+            "You're officially part of the community. Check out #get-roles to customize your experience, "
+            "and type `!help` in any public channel for everything I can do.\n\n"
+            "If you want to get important DM announcements/pings, type `!optin` in the server at any time!"
+        )
+        await member.send(welcome_message)
+    except Exception:
+        print(f"❗ Could not DM member {member.name} (Privacy settings?)")
 
 @client.event
 async def on_raw_reaction_add(payload):
@@ -204,6 +226,71 @@ async def on_raw_reaction_remove(payload):
 
 @client.event
 async def on_message(message):
+    if message.author == client.user or message.author.bot:
+        return
+
+    content = message.content.strip()
+
+    # === DM OPT-IN/OUT ===
+    if content.lower() == "!optin":
+        dm_optin_set.add(str(message.author.id))
+        save_dm_optin()
+        await message.channel.send(f"✅ {message.author.mention} opted in to DM announcements.")
+        return
+
+    if content.lower() == "!optout":
+        if str(message.author.id) in dm_optin_set:
+            dm_optin_set.remove(str(message.author.id))
+            save_dm_optin()
+            await message.channel.send(f"✅ {message.author.mention} opted out of DM announcements.")
+        else:
+            await message.channel.send(f"You're not opted in!")
+        return
+
+    # === ADMIN: DM ANY USER ===
+    if content.lower().startswith("!dmtouser "):
+        if not message.author.guild_permissions.administrator:
+            await message.channel.send("⛔ Only admins can DM users with this command.")
+            return
+        match = re.match(r"!dmtouser\s+<@!?(\d+)>\s+(.+)", content)
+        if not match:
+            await message.channel.send("Format: !dmtouser @user message_here")
+            return
+        user_id, dm_content = match.groups()
+        user = client.get_user(int(user_id))
+        if user:
+            try:
+                await user.send(dm_content)
+                await message.channel.send("✅ Direct message sent!")
+            except Exception:
+                await message.channel.send("❌ I couldn't DM this user (privacy settings may block it).")
+        else:
+            await message.channel.send("❌ User not found.")
+        return
+
+    # === ADMIN: MASS DM (OPTED-IN) ===
+    if content.lower().startswith("!dmall "):
+        if not message.author.guild_permissions.administrator:
+            await message.channel.send("⛔ Only admins can mass DM.")
+            return
+        dm_content = content[len("!dmall "):].strip()
+        if not dm_optin_set:
+            await message.channel.send("No users have opted in to DM announcements.")
+            return
+        count = 0
+        for user_id in dm_optin_set.copy():
+            user = client.get_user(int(user_id))
+            if user:
+                try:
+                    await user.send(dm_content)
+                    count += 1
+                    await asyncio.sleep(1.2)
+                except:
+                    dm_optin_set.discard(user_id)
+        save_dm_optin()
+        await message.channel.send(f"✅ DM sent to {count} opted-in users.")
+        return
+        
     if message.author == client.user or message.author.bot:
         return
 
@@ -638,5 +725,6 @@ async def on_message(message):
 
 if __name__ == "__main__":
     client.run(DISCORD_TOKEN)
+
 
 
