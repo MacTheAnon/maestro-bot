@@ -1,2 +1,5 @@
 discord.py
+
 google-generativeai
+
+openai
