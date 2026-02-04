@@ -1,5 +1,5 @@
 import discord
-import google.generativeai as genai
+import google.genai as genai
 import openai
 from groq import Groq
 import os
@@ -99,15 +99,18 @@ RULES:
 """
 
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-flash-latest', system_instruction=SYSTEM_PROMPT)
+model = genai.GenerativeModel("gemini-1.5-flash-latest")
 client_openai = openai.OpenAI(api_key=OPENAI_API_KEY)
 client_groq = Groq(api_key=GROQ_API_KEY)
 
 async def generate_response(prompt):
     """Gemini > OpenAI > Groq: AI fallback strategy."""
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        gemini_response = model.generate_content([
+            {"role": "system", "parts": [SYSTEM_PROMPT]},
+            {"role": "user", "parts": [prompt]}
+        ])
+        return gemini_response.text
     except Exception as e:
         if "429" in str(e):
             print("⚠️ Gemini out. Trying OpenAI...")
