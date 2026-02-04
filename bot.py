@@ -3,6 +3,7 @@ import google.generativeai as genai
 import os
 import json
 import asyncio
+import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -123,11 +124,13 @@ async def on_member_join(member):
 
 @client.event
 async def on_message(message):
-    if message.author == client.user:
+    if message.author == client.user or message.author.bot:
         return
 
+    content = message.content.strip()
+
     # --- MANUAL COMMANDS ---
-    if message.content == "!setup_py101":
+    if content.lower() == "!setup_py101":
         if not message.author.guild_permissions.administrator:
             await message.channel.send("⛔ Only Admins can run the full course setup.")
             return
@@ -153,8 +156,8 @@ async def on_message(message):
         return
 
     # --- YOUTUBE SEARCH COMMAND ---
-    if message.content.startswith("!yt"):
-        search_query = message.content.replace("!yt", "").strip()
+    if content.lower().startswith("!yt "):
+        search_query = content[4:].strip()
         if not search_query:
             await message.channel.send("⚠️ Please provide a topic! Example: `!yt python tutorial`")
             return
@@ -163,9 +166,9 @@ async def on_message(message):
             yt_response = model.generate_content(yt_prompt)
             await message.channel.send(f"🎬 **Maestro's Top Pick for '{search_query}':**\n{yt_response.text}")
         return
-        
-    if message.content.startswith("!ask"):
-        question = message.content[len("!ask"):].strip()
+
+    if content.lower().startswith("!ask "):
+        question = content[5:].strip()
         if not question:
             await message.channel.send("❓ Please enter a question after `!ask`.")
             return
@@ -174,30 +177,38 @@ async def on_message(message):
             answer = model.generate_content(tutor_prompt)
             await message.channel.send(answer.text[:2000])
         return
-        
-    if message.content.startswith("!flashcard"):
-        topic = message.content[len("!flashcard"):].strip() or "python"
+
+    if content.lower().startswith("!flashcard"):
+        topic = content[len("!flashcard"):].strip() or "python"
         async with message.channel.typing():
             flashcard_prompt = f"Give me a simple {topic} flashcard: one short question and answer, format:\nQuestion: ...\nAnswer: ...\nDo not show answer immediately."
             response = model.generate_content(flashcard_prompt)
             parts = response.text.split("Answer:")
             if len(parts) == 2:
-                await message.author.send(f"**Flashcard Question:**\n{parts[0].strip()}\nReply with anything to see the answer.")
-                def check(m): return m.author == message.author and isinstance(m.channel, discord.DMChannel)
-                await client.wait_for('message', check=check)
-                await message.author.send(f"**Answer:** {parts[1].strip()}")
+                try:
+                    await message.author.send(f"**Flashcard Question:**\n{parts[0].strip()}\nReply with anything to see the answer.")
+                    def check(m): return m.author == message.author and isinstance(m.channel, discord.DMChannel)
+                    reply = await client.wait_for('message', check=check, timeout=60)
+                    await message.author.send(f"**Answer:** {parts[1].strip()}")
+                except asyncio.TimeoutError:
+                    try:
+                        await message.author.send("⏰ Timed out! Try `!flashcard` again.")
+                    except Exception:
+                        await message.channel.send("❗ I couldn't DM you. Please enable DMs from server members.")
+                except Exception:
+                    await message.channel.send("❗ I couldn't DM you. Please enable DMs from server members.")
             else:
                 await message.channel.send("⚠️ Couldn't generate flashcard. Try again.")
         return
-        
-    if message.content.startswith("!challenge"):
+
+    if content.lower() == "!challenge":
         async with message.channel.typing():
             challenge_prompt = "Give me today's quick Python coding challenge. Keep it under 1 paragraph, beginner friendly. No solution, just the challenge."
             challenge = model.generate_content(challenge_prompt)
             await message.channel.send(f"🧩 **Daily Challenge:**\n{challenge.text[:1900]}")
         return
-        
-    if message.content == "!earn":
+
+    if content.lower() == "!earn":
         role_name = "Python Learner"
         guild = message.guild
         role = discord.utils.get(guild.roles, name=role_name)
@@ -207,8 +218,8 @@ async def on_message(message):
         await message.channel.send(f"🏅 {message.author.mention} earned the **{role_name}** badge!")
         return
 
-    if message.content.startswith("!review"):
-        code = message.content[len("!review"):].strip()
+    if content.lower().startswith("!review "):
+        code = content[8:].strip()
         if not code:
             await message.channel.send("Paste your code after `!review` for feedback.")
             return
@@ -218,8 +229,8 @@ async def on_message(message):
         await message.channel.send(f"📝 **Review:**\n{review.text[:1900]}")
         return
 
-    if message.content.startswith("!resource"):
-        topic = message.content[len("!resource"):].strip()
+    if content.lower().startswith("!resource "):
+        topic = content[9:].strip()
         if not topic:
             await message.channel.send("Type a topic after `!resource`.")
             return
@@ -228,7 +239,7 @@ async def on_message(message):
         await message.channel.send(f"🔗 {links.text[:1900]}")
         return
 
-    if message.content.startswith("!studygroup"):
+    if content.lower() == "!studygroup":
         group_name = f"studygroup-{message.author.name}".lower()
         guild = message.guild
         cat = discord.utils.get(guild.categories, name="Study Groups")
@@ -243,21 +254,20 @@ async def on_message(message):
         await message.channel.send(f"🔒 Study group created: {chan.mention}")
         return
 
-    if message.content.startswith("!announce"):
+    if content.lower().startswith("!announce "):
         if not message.author.guild_permissions.administrator:
             await message.channel.send("Admins only.")
             return
         try:
-            title, description = message.content[len("!announce"):].split("|", 1)
+            title, description = content[9:].split("|", 1)
             announce = f"📢 **{title.strip()}**\n\n{description.strip()}"
             await message.channel.send(announce)
         except Exception:
             await message.channel.send("Use: !announce Event Title | Event details here")
         return
 
-    if message.content.startswith("!remindme"):
-        import re
-        match = re.match(r"!remindme (\d+)([mh]) (.+)", message.content)
+    if content.lower().startswith("!remindme "):
+        match = re.match(r"!remindme (\d+)([mh]) (.+)", content)
         if not match:
             await message.channel.send("Format: !remindme 5m Take a break")
             return
@@ -265,14 +275,17 @@ async def on_message(message):
         secs = int(num) * (60 if unit == "m" else 3600)
         await message.channel.send(f"⏰ I'll DM you in {num}{unit}: {reminder}")
         async def send_reminder():
-            await asyncio.sleep(secs)
-            await message.author.send(f"⏰ Reminder: {reminder}")
+            try:
+                await asyncio.sleep(secs)
+                await message.author.send(f"⏰ Reminder: {reminder}")
+            except Exception:
+                await message.channel.send("❗ I couldn't DM you the reminder. Please enable DMs from server members.")
         asyncio.create_task(send_reminder())
         return
 
-    if message.content.startswith("!poll"):
+    if content.lower().startswith("!poll "):
         try:
-            parts = message.content[len("!poll"):].split("|")
+            parts = content[6:].split("|")
             question = parts[0].strip()
             options = [opt.strip() for opt in parts[1:]]
             if len(options) < 2 or len(options) > 5:
@@ -286,7 +299,7 @@ async def on_message(message):
             await message.channel.send("Format: !poll Question | Option1 | Option2 ...")
         return
 
-    if message.content == "!help":
+    if content.lower() == "!help":
         is_admin = False
         if message.guild:
             perms = message.author.guild_permissions
@@ -308,13 +321,14 @@ async def on_message(message):
             "`!setup_py101` — Full course environment setup",
             "`!announce Title | Description` — Post an announcement (admins only)"
         ]
-        msg = "**🤖 Maestro Bot Help**\n"
+        msg = "**🤖 Maestro Bot Help**\n\n"
         msg += "\n".join(user_commands)
         if is_admin:
             msg += "\n\n**🛡️ Admin/Mod Commands:**\n"
             msg += "\n".join(admin_commands)
         await message.channel.send(msg)
         return
+
     # --- AI ARCHITECT (The Unlimited Engine) ---
     if client.user.mentioned_in(message):
         async with message.channel.typing():
@@ -387,4 +401,3 @@ async def on_message(message):
 
 if __name__ == "__main__":
     client.run(DISCORD_TOKEN)
-
