@@ -6,762 +6,690 @@ import os
 import json
 import asyncio
 import re
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import base64
 import threading
+import requests
+import hashlib
+import hmac
+import logging
+import sys
+import traceback
+import time
+from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import unquote_plus, parse_qs
 
-# --- 1. LOAD KNOWLEDGE BASE
+# ==============================================================================
+# SECTION 1: SYSTEM CONFIGURATION & CONSTANTS
+# ==============================================================================
+VERSION = "3.1.0-STABLE"
+BRAND_NAME = "Maestro Digital Solutions"
+DEVELOPER_NAME = "Kaleb McIntosh"
+PORTFOLIO_LINK = "https://www.kalebmcintosh.com"
+GITHUB_PROJECT_LINK = "https://github.com/MacTheAnon/study-helper"
+
+# Brand Palette
+COLOR_PRIMARY = 0x38bdf8  # Cyber Cyan
+COLOR_ACCENT = 0xf59e0b   # Executive Gold
+COLOR_SUCCESS = 0x22c55e  # Green
+COLOR_ERROR = 0xef4444    # Red
+COLOR_BG = "#0f172a"      # Navy Slate
+
+# Logging Setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+    handlers=[
+        logging.FileHandler("maestro_monolith.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("MaestroCore")
+
+# ==============================================================================
+# SECTION 2: DATA PERSISTENCE ENGINE
+# ==============================================================================
+class PersistenceEngine:
+    """
+    Manages all local JSON storage with robust error handling and backups.
+    Ensures data survives Render's restart cycles.
+    """
+    def __init__(self):
+        self.files = {
+            "optin": "dm_optin.json",
+            "reactions": "role_reactions.json",
+            "logs": "admin_audit.json"
+        }
+        self.dm_optins = self._load_set(self.files["optin"])
+        self.role_reactions = self._load_dict(self.files["reactions"])
+
+    def _load_set(self, filepath):
+        if not os.path.exists(filepath):
+            return set()
+        try:
+            with open(filepath, 'r') as f:
+                return set(json.load(f))
+        except Exception as e:
+            logger.error(f"Failed to load set from {filepath}: {e}")
+            return set()
+
+    def _load_dict(self, filepath):
+        if not os.path.exists(filepath):
+            return {}
+        try:
+            with open(filepath, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load dict from {filepath}: {e}")
+            return {}
+
+    def save_state(self):
+        """Commits all in-memory data to disk."""
+        try:
+            with open(self.files["optin"], 'w') as f:
+                json.dump(list(self.dm_optins), f)
+            with open(self.files["reactions"], 'w') as f:
+                json.dump(self.role_reactions, f, indent=4)
+            logger.info("Persistence: State saved successfully.")
+        except Exception as e:
+            logger.critical(f"Persistence: SAVE FAILED. Error: {e}")
+
+    def add_optin(self, user_id):
+        self.dm_optins.add(str(user_id))
+        self.save_state()
+
+    def remove_optin(self, user_id):
+        if str(user_id) in self.dm_optins:
+            self.dm_optins.remove(str(user_id))
+            self.save_state()
+
+    def add_reaction_role(self, msg_id, role_name):
+        self.role_reactions[str(msg_id)] = role_name
+        self.save_state()
+
+db = PersistenceEngine()
+
+# ==============================================================================
+# SECTION 3: KNOWLEDGE BASE IMPORT
+# ==============================================================================
 try:
     from knowledge import COURSE_NOTES
 except ImportError:
-    COURSE_NOTES = "No specific course notes loaded."
+    COURSE_NOTES = (
+        "No external knowledge.py found. "
+        "Topics: Python, Cybersecurity, React, Game Development."
+    )
 
-# --- 2. CONFIGURATION
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-# --- DM Opt-in storage ---
-dm_optin_file = "dm_optin.json"
-if os.path.exists(dm_optin_file):
-    with open(dm_optin_file, "r") as f:
-        dm_optin_set = set(json.load(f))
-else:
-    dm_optin_set = set()
-def save_dm_optin():
-    with open(dm_optin_file, "w") as f:
-        json.dump(list(dm_optin_set), f)
-
-
-# --- 3. FAKE WEB SERVER
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Maestro Bot is breathing!")
-
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    print(f"🌐 Starting web server on port {port}...")
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    server.serve_forever()
-threading.Thread(target=run_server, daemon=True).start()
-
-# --- 4. SYSTEM PROMPT FOR AI
-SYSTEM_PROMPT = f"""
-You are "Maestro Bot", the official AI Mentor & Server Architect.
---- KNOWLEDGE BASE ---
-{COURSE_NOTES}
-----------------------
-YOUR PERSONA:
-1. You are a Expert in Python, Cybersecurity, React, JS.
-2. You have a "Professor Mentality" (Explain WHY, don't just solve).
-3. You are a Server Architect with UNLIMITED creative control.
-🚨 SPECIAL ABILITY: GOD MODE (ARCHITECT) 🚨
-If the user asks to modify the server, output a JSON block.
-YOU CAN SET PERMISSIONS & USE EMOJIS!
-- "Read Only" = {{"send_messages": false}}
-- "Private" = {{"view_channel": false}}
-- "Admins Only" = {{"view_channel": false}} for @everyone, {{"view_channel": true}} for Admin role.
-JSON FORMAT:
-```json
-{{
-  "plan_name": "Brief description",
-  "actions": [
-    {{
-      "type": "create_role",
-      "name": "Role Name",
-      "color": "#FF0000"
-    }},
-    {{
-      "type": "create_category",
-      "name": "Category Name",
-      "permissions": {{
-        "@everyone": {{"view_channel": false}},
-        "Role Name": {{"view_channel": true}}
-      }}
-    }},
-    {{
-      "type": "create_text",
-      "name": "channel-name",
-      "category": "Category Name",
-      "permissions": {{
-        "@everyone": {{"view_channel": false}},
-        "Role Name": {{"view_channel": true}}
-      }},
-      "description": "Blah blah welcome text"
-    }},
-    {{
-      "type": "reaction_role_message",
-      "channel": "get-roles",
-      "emoji": "🔔",
-      "role": "Role Name",
-      "description": "React below to get access to the private channel!"
-    }}
-  ]
-}}
-RULES:
-1.Output ONLY the JSON block.
-2."permissions"/"description" optional but best practice.
-3.Use "@everyone" for default role.
-"""
-
-# ----- Gemini (generativeai) Model Setup -----
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel("gemini-flash-latest", system_instruction=SYSTEM_PROMPT)
-client_openai = openai.OpenAI(api_key=OPENAI_API_KEY)
-client_groq = Groq(api_key=GROQ_API_KEY)
-
-async def generate_response(prompt):
-    try:
-        gemini_response = model.generate_content(prompt)
-        return gemini_response.text
-    except Exception as e:
-        if "429" in str(e):
-            print("⚠️ Gemini out. Trying OpenAI...")
-            try:
-                completion = client_openai.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                return completion.choices[0].message.content
-            except Exception as e2:
-                print("⚠️ OpenAI out. Trying Groq...")
-                try:
-                    chat_completion = client_groq.chat.completions.create(
-                        messages=[
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": prompt}
-                        ],
-                        model="llama3-8b-8192"
-                    )
-                    return chat_completion.choices[0].message.content
-                except Exception as e3:
-                    print("❌ All AI systems exhausted.", e3)
-                    return "❌ All AI systems are exhausted. Please try again in a few minutes."
-        return f"❌ Gemini Error: {e}"
-
-role_reaction_messages = {}
-
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-intents.reactions = True
-client = discord.Client(intents=intents)
-
-@client.event
-async def on_ready():
-    print(f'⚡ {client.user} is online! Type "@MaestroBot hello" to test.')
-
-@client.event
-async def on_member_join(member):
-    role_name = "FebruaryCohort"
-    role = discord.utils.get(member.guild.roles, name=role_name)
-    if role:
-        try:
-            await member.add_roles(role)
-            print(f"✅ Assigned {role_name} to {member.name}")
-        except Exception as e:
-            print(f"❌ Failed to assign role: {e}")
-    else:
-        print(f"⚠️ Role '{role_name}' not found in this server.")
-    # --- Auto DM on join ---
-    try:
-        welcome_message = (
-            f"👋 Welcome to Maestro, {member.display_name}!\n\n"
-            "You're officially part of the community. Check out #get-roles to customize your experience, "
-            "and type `!help` in any public channel for everything I can do.\n\n"
-            "If you want to get important DM announcements/pings, type `!optin` in the server at any time!"
-        )
-        await member.send(welcome_message)
-    except Exception:
-        print(f"❗ Could not DM member {member.name} (Privacy settings?)")
-
-@client.event
-async def on_raw_reaction_add(payload):
-    if payload.user_id == client.user.id:
-        return
-    guild = client.get_guild(payload.guild_id)
-    if not guild:
-        return
-    role_name = role_reaction_messages.get(payload.message_id)
-    if not role_name:
-        channel = guild.get_channel(payload.channel_id)
-        if channel and channel.name == "get-roles":
-            if str(payload.emoji) == "🔔":
-                role = discord.utils.get(guild.roles, name="YouTube Supporter")
-                if role:
-                    member = payload.member or guild.get_member(payload.user_id)
-                    if member and role not in member.roles:
-                        await member.add_roles(role)
-        return
-    role = discord.utils.get(guild.roles, name=role_name)
-    member = payload.member or guild.get_member(payload.user_id)
-    if role and member and role not in member.roles:
-        await member.add_roles(role)
-
-@client.event
-async def on_raw_reaction_remove(payload):
-    guild = client.get_guild(payload.guild_id)
-    if not guild:
-        return
-    role_name = role_reaction_messages.get(payload.message_id)
-    if not role_name:
-        channel = guild.get_channel(payload.channel_id)
-        if channel and channel.name == "get-roles":
-            if str(payload.emoji) == "🔔":
-                role = discord.utils.get(guild.roles, name="YouTube Supporter")
-                if role:
-                    member = guild.get_member(payload.user_id)
-                    if member and role in member.roles:
-                        await member.remove_roles(role)
-        return
-    role = discord.utils.get(guild.roles, name=role_name)
-    member = guild.get_member(payload.user_id)
-    if role and member and role in member.roles:
-        await member.remove_roles(role)
-
-@client.event
-async def on_message(message):
-    if message.author == client.user or message.author.bot:
-        return
-
-    content = message.content.strip()
-
-    # === DM OPT-IN/OUT ===
-    if content.lower() == "!optin":
-        dm_optin_set.add(str(message.author.id))
-        save_dm_optin()
-        await message.channel.send(f"✅ {message.author.mention} opted in to DM announcements.")
-        return
-
-    if content.lower() == "!optout":
-        if str(message.author.id) in dm_optin_set:
-            dm_optin_set.remove(str(message.author.id))
-            save_dm_optin()
-            await message.channel.send(f"✅ {message.author.mention} opted out of DM announcements.")
-        else:
-            await message.channel.send(f"You're not opted in!")
-        return
-
-    # === ADMIN: DM ANY USER ===
-    if content.lower().startswith("!dmtouser "):
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send("⛔ Only admins can DM users with this command.")
-            return
-        match = re.match(r"!dmtouser\s+<@!?(\d+)>\s+(.+)", content)
-        if not match:
-            await message.channel.send("Format: !dmtouser @user message_here")
-            return
-        user_id, dm_content = match.groups()
-        user = client.get_user(int(user_id))
-        if user:
-            try:
-                await user.send(dm_content)
-                await message.channel.send("✅ Direct message sent!")
-            except Exception:
-                await message.channel.send("❌ I couldn't DM this user (privacy settings may block it).")
-        else:
-            await message.channel.send("❌ User not found.")
-        return
-
-    # === ADMIN: MASS DM (OPTED-IN) ===
-    if content.lower().startswith("!dmall "):
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send("⛔ Only admins can mass DM.")
-            return
-        dm_content = content[len("!dmall "):].strip()
-        if not dm_optin_set:
-            await message.channel.send("No users have opted in to DM announcements.")
-            return
-        count = 0
-        for user_id in dm_optin_set.copy():
-            user = client.get_user(int(user_id))
-            if user:
-                try:
-                    await user.send(dm_content)
-                    count += 1
-                    await asyncio.sleep(1.2)
-                except:
-                    dm_optin_set.discard(user_id)
-        save_dm_optin()
-        await message.channel.send(f"✅ DM sent to {count} opted-in users.")
-        return
+# ==============================================================================
+# SECTION 4: AI BRAIN (TRIPLE FAILOVER)
+# ==============================================================================
+class AIEngine:
+    def __init__(self):
+        # Load Keys
+        self.k_google = os.getenv("GOOGLE_API_KEY")
+        self.k_openai = os.getenv("OPENAI_API_KEY")
+        self.k_groq = os.getenv("GROQ_API_KEY")
         
-    if message.author == client.user or message.author.bot:
-        return
+        # Init Google
+        if self.k_google:
+            genai.configure(api_key=self.k_google)
+            self.gemini = genai.GenerativeModel("gemini-1.5-flash")
+        else:
+            self.gemini = None
+            logger.warning("Google API Key missing.")
+        
+        # Init OpenAI
+        self.openai = openai.OpenAI(api_key=self.k_openai) if self.k_openai else None
+        
+        # Init Groq
+        self.groq = Groq(api_key=self.k_groq) if self.k_groq else None
 
-    content = message.content.strip()
-
-    # === SMART PRIVATE ROLE & REACTION SYSTEM ===
-    if content.lower().startswith("!setup_private_role"):
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send("⛔ Only admins can use this.")
-            return
-        try:
-            args = content[len("!setup_private_role"):].split('|')
-            if len(args) < 5:
-                await message.channel.send("Usage: !setup_private_role RoleName | Category | channel-name | description | emoji")
-                return
-            role_name = args[0].strip()
-            category_name = args[1].strip()
-            channel_name = args[2].strip()
-            description = args[3].strip()
-            emoji = args[4].strip()
-            guild = message.guild
-            role = discord.utils.get(guild.roles, name=role_name)
-            if not role:
-                role = await guild.create_role(name=role_name, mentionable=True)
-            category = discord.utils.get(guild.categories, name=category_name)
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                role: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            }
-            if not category:
-                category = await guild.create_category(category_name, overwrites=overwrites)
-            else:
-                await category.edit(overwrites=overwrites)
-            ch = discord.utils.get(guild.text_channels, name=channel_name)
-            if not ch:
-                ch = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
-            else:
-                await ch.edit(category=category, overwrites=overwrites)
-            embed = discord.Embed(
-                title=f"Welcome to {role_name} channel!",
-                description=description,
-                color=discord.Color.green()
-            )
-            await ch.send(embed=embed)
-            get_roles_ch = discord.utils.get(guild.text_channels, name="get-roles")
-            if get_roles_ch:
-                opt_in_msg = await get_roles_ch.send(
-                    f"{emoji} **Want to join `{role_name}` and access {ch.mention}?** React with {emoji} to opt-in; remove to opt-out."
-                )
-                await opt_in_msg.add_reaction(emoji)
-                role_reaction_messages[opt_in_msg.id] = role_name
-            await message.channel.send(f"✅ Private role/channel for `{role_name}` live! Opt-in posted in #get-roles.")
-        except Exception as e:
-            await message.channel.send(f"❌ Error: {e}")
-        return
-    if message.author == client.user or message.author.bot:
-        return
-
-    content = message.content.strip()
-
-    # --- MANUAL COMMANDS ---
-    if content.lower() == "!setup_py101":
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send("⛔ Only Admins can run the full course setup.")
-            return
-
-        status_msg = await message.channel.send("⏳ Setting up PY101 Environment...")
-        guild = message.guild
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=True, send_messages=False),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-        try:
-            cat = await guild.create_category("PY101 Curriculum 🐍", overwrites=overwrites)
-            chan = await guild.create_text_channel("study-plan", category=cat)
-            await chan.send("📘 **OFFICIAL PY101 STUDY PLAN & NOTES**")
-            if len(COURSE_NOTES) > 2000:
-                for i in range(0, len(COURSE_NOTES), 2000):
-                    await chan.send(COURSE_NOTES[i:i+2000])
-            else:
-                await chan.send(COURSE_NOTES)
-            await status_msg.edit(content=f"✅ Success! Created {cat.name} and posted notes.")
-        except Exception as e:
-            await status_msg.edit(content=f"❌ Setup Failed: {e}")
-        return
-
-    # --- ADMIN: CREATE ROLE ---
-    if content.lower().startswith("!make_role"):
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send("⛔ Only admins can create roles.")
-            return
-        try:
-            # !make_role Mentor | orange | true
-            parts = content[len("!make_role"):].split("|")
-            name = parts[0].strip()
-            color = discord.Color.default()
-            hoist = False
-
-            if len(parts) > 1 and parts[1].strip():
-                color_str = parts[1].strip()
-                try:
-                    if color_str.startswith("#"):
-                        color = discord.Color(int(color_str.replace("#", ""), 16))
-                    else:
-                        color = getattr(discord.Color, color_str.lower())()
-                except Exception:
-                    pass
-
-            if len(parts) > 2:
-                hoist = parts[2].strip().lower() in ["true", "1", "yes", "y"]
-
-            existing_role = discord.utils.get(message.guild.roles, name=name)
-            if existing_role:
-                await message.channel.send("A role with that name already exists.")
-                return
-            role = await message.guild.create_role(name=name, color=color, hoist=hoist)
-            await message.channel.send(f"✅ Created role **{role.name}**.")
-        except Exception as e:
-            await message.channel.send(f"❌ Could not create role: {e}")
-        return
-
-    # --- ADMIN: POST ANYWHERE ---
-    if content.lower().startswith("!post_in"):
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send("⛔ Only admins can use this feature.")
-            return
-        try:
-            match = re.match(r"!post_in\s+#?([\w\-]+)\s*\|\s*(.+)", content, re.I)
-            if not match:
-                await message.channel.send("Format: `!post_in #channel | Your message here`")
-                return
-            chan_name, msg = match.groups()
-            target_chan = discord.utils.get(message.guild.text_channels, name=chan_name)
-            if not target_chan:
-                await message.channel.send(f"Couldn't find channel: {chan_name}")
-                return
-            await target_chan.send(msg)
-            await message.channel.send(f"✅ Posted in {target_chan.mention}")
-        except Exception as e:
-            await message.channel.send(f"❌ Could not send message: {e}")
-        return
-
-    # --- YOUTUBE SEARCH COMMAND ---
-    if content.lower().startswith("!yt "):
-        search_query = content[4:].strip()
-        if not search_query:
-            await message.channel.send("⚠️ Please provide a topic! Example: `!yt python tutorial`")
-            return
-        async with message.channel.typing():
-            yt_prompt = f"Find a high-quality, relevant YouTube video link for this topic: {search_query}. Return ONLY the URL."
-            response_text = await generate_response(yt_prompt)
-            if response_text.startswith("❌ All AI systems"):
-                await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
-            else:
-                await message.channel.send(f"🎬 **Maestro's Top Pick for '{search_query}':**\n{response_text}")
-        return
-
-    if content.lower().startswith("!ask "):
-        question = content[5:].strip()
-        if not question:
-            await message.channel.send("❓ Please enter a question after `!ask`.")
-            return
-        async with message.channel.typing():
-            tutor_prompt = f"Answer as an expert Python tutor, step by step. Student: {question}"
-            response_text = await generate_response(tutor_prompt)
-            if response_text.startswith("❌ All AI systems"):
-                await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
-            else:
-                await message.channel.send(response_text[:2000])
-        return
-
-    if content.lower().startswith("!flashcard"):
-        topic = content[len("!flashcard"):].strip() or "python"
-        async with message.channel.typing():
-            flashcard_prompt = f"Give me a simple {topic} flashcard: one short question and answer, format:\nQuestion: ...\nAnswer: ...\nDo not show answer immediately."
-            response_text = await generate_response(flashcard_prompt)
-            if response_text.startswith("❌ All AI systems"):
-                await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
-                return
-            parts = response_text.split("Answer:")
-            if len(parts) == 2:
-                try:
-                    await message.author.send(f"**Flashcard Question:**\n{parts[0].strip()}\nReply with anything to see the answer.")
-                    def check(m): return m.author == message.author and isinstance(m.channel, discord.DMChannel)
-                    reply = await client.wait_for('message', check=check, timeout=60)
-                    await message.author.send(f"**Answer:** {parts[1].strip()}")
-                except asyncio.TimeoutError:
-                    try:
-                        await message.author.send("⏰ Timed out! Try `!flashcard` again.")
-                    except Exception:
-                        await message.channel.send("❗ I couldn't DM you. Please enable DMs from server members.")
-                except Exception:
-                    await message.channel.send("❗ I couldn't DM you. Please enable DMs from server members.")
-            else:
-                await message.channel.send("⚠️ Couldn't generate flashcard. Try again.")
-        return
-
-    if content.lower() == "!challenge":
-        async with message.channel.typing():
-            challenge_prompt = "Give me today's quick Python coding challenge. Keep it under 1 paragraph, beginner friendly. No solution, just the challenge."
-            response_text = await generate_response(challenge_prompt)
-            if response_text.startswith("❌ All AI systems"):
-                await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
-            else:
-                await message.channel.send(f"🧩 **Daily Challenge:**\n{response_text[:1900]}")
-        return
-
-    if content.lower() == "!earn":
-        role_name = "Python Learner"
-        guild = message.guild
-        role = discord.utils.get(guild.roles, name=role_name)
-        # Create the role if it doesn't exist
-        if not role:
-            try:
-                role = await guild.create_role(
-                    name=role_name, 
-                    color=discord.Color.gold(), 
-                    hoist=True
-                )
-            except Exception as e:
-                await message.channel.send("❌ Could not create the badge role. Please contact an admin.")
-                print(f"❌ Could not create role: {e}")
-
-        if role and role not in message.author.roles:
-            await message.author.add_roles(role)
-            embed = discord.Embed(
-                title="Achievement Unlocked!",
-                description=f"{message.author.mention} has officially earned the **{role_name}** badge! 🐍✨",
-                color=discord.Color.gold()
-            )
-            embed.set_thumbnail(url="https://i.imgur.com/Bf1o67I.png") # Python badge icon
-            await message.channel.send(embed=embed)
-        elif role:
-            await message.channel.send(f"{message.author.mention}, you already have the **{role_name}** badge! 🥇")
-        return
-
-    if content.lower() == "!dev":
-        embed = discord.Embed(
-            title="About the Developer",
-            description=(
-                "Hi, I'm **Kaleb McIntosh**, one of your February cohorts!\n\n"
-                "I'm grateful for everyone in this community and eager to help 🎉\n\n"
-                "[🌐 My Portfolio](https://www.kalebmcintosh.com)\n"
-                "[💻 McIntosh Digital](https://www.mcintoshdigital.com)"
-            ),
-            color=discord.Color.blue()
+        self.system_prompt = (
+            f"You are Maestro Bot. Version {VERSION}. "
+            f"Knowledge Base: {COURSE_NOTES[:2000]}... " # Truncate to save context
+            "Persona: Professor, Architect, Senior Engineer. "
+            "If asked to modify server, output ONLY JSON."
         )
-        embed.set_footer(text="Let’s code and grow together! 🚀")
-        await message.channel.send(embed=embed)
-        return
 
-    if content.lower().startswith("!review "):
-        code = content[8:].strip()
-        if not code:
-            await message.channel.send("Paste your code after `!review` for feedback.")
-            return
-        review_prompt = ("Review the following code, spot mistakes, and give one improvement suggestion. "
-                         "Be positive and short. Code:\n" + code)
-        response_text = await generate_response(review_prompt)
-        if response_text.startswith("❌ All AI systems"):
-            await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
-        else:
-            await message.channel.send(f"📝 **Review:**\n{response_text[:1900]}")
-        return
+    async def query(self, prompt, architect_mode=False):
+        final_prompt = f"{self.system_prompt}\n\nUSER: {prompt}"
+        if architect_mode:
+            final_prompt += "\n\nINSTRUCTION: Output a valid JSON Action Plan."
 
-    if content.lower().startswith("!resource "):
-        topic = content[9:].strip()
-        if not topic:
-            await message.channel.send("Type a topic after `!resource`.")
-            return
-        resource_prompt = f"Give 2 top beginner-friendly, free resources for learning {topic}. Include links."
-        response_text = await generate_response(resource_prompt)
-        if response_text.startswith("❌ All AI systems"):
-            await message.channel.send("🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!")
-        else:
-            await message.channel.send(f"🔗 {response_text[:1900]}")
-        return
-
-    if content.lower() == "!studygroup":
-        group_name = f"studygroup-{message.author.name}".lower()
-        guild = message.guild
-        cat = discord.utils.get(guild.categories, name="Study Groups")
-        if not cat:
-            cat = await guild.create_category("Study Groups")
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            message.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        }
-        chan = await guild.create_text_channel(group_name, category=cat, overwrites=overwrites)
-        await chan.send(f"🧑‍💻 Welcome to your private study group, {message.author.mention}!")
-        await message.channel.send(f"🔒 Study group created: {chan.mention}")
-        return
-
-    if content.lower().startswith("!announce "):
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send("Admins only.")
-            return
+        # Attempt 1: Gemini
         try:
-            title, description = content[9:].split("|", 1)
-            announce = f"📢 **{title.strip()}**\n\n{description.strip()}"
-            await message.channel.send(announce)
-        except Exception:
-            await message.channel.send("Use: !announce Event Title | Event details here")
-        return
+            if self.gemini:
+                response = self.gemini.generate_content(final_prompt)
+                return response.text
+        except Exception as e:
+            logger.warning(f"Gemini Fail: {e}")
 
-    if content.lower().startswith("!remindme "):
-        match = re.match(r"!remindme (\d+)([mh]) (.+)", content)
-        if not match:
-            await message.channel.send("Format: !remindme 5m Take a break")
-            return
-        num, unit, reminder = match.groups()
-        secs = int(num) * (60 if unit == "m" else 3600)
-        await message.channel.send(f"⏰ I'll DM you in {num}{unit}: {reminder}")
-        async def send_reminder():
+        # Attempt 2: OpenAI
+        try:
+            if self.openai:
+                res = self.openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "system", "content": "You are Maestro."}, {"role": "user", "content": final_prompt}]
+                )
+                return res.choices[0].message.content
+        except Exception as e:
+            logger.warning(f"OpenAI Fail: {e}")
+
+        # Attempt 3: Groq
+        try:
+            if self.groq:
+                res = self.groq.chat.completions.create(
+                    messages=[{"role": "system", "content": "You are Maestro."}, {"role": "user", "content": final_prompt}],
+                    model="llama3-8b-8192"
+                )
+                return res.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Groq Fail: {e}")
+
+        return "❌ CRITICAL: All AI systems are offline. Please check API quotas."
+
+brain = AIEngine()
+
+# ==============================================================================
+# SECTION 5: WEB DASHBOARD & WEBHOOK LISTENER
+# ==============================================================================
+class DashboardHandler(BaseHTTPRequestHandler):
+    def check_auth(self):
+        user = os.getenv("DASHBOARD_USER", "admin")
+        pw = os.getenv("DASHBOARD_PASS", "maestro2026")
+        auth_header = self.headers.get('Authorization')
+        encoded = base64.b64encode(f"{user}:{pw}".encode()).decode()
+        if auth_header != f"Basic {encoded}":
+            self.send_response(401)
+            self.send_header('WWW-Authenticate', 'Basic realm="Maestro Secure"')
+            self.end_headers()
+            self.wfile.write(b"Unauthorized")
+            return False
+        return True
+
+    def do_GET(self):
+        if self.path == "/":
+            self.send_response(200); self.send_header("Content-type", "text/html"); self.end_headers()
+            self.wfile.write(self.get_html(is_admin=False).encode())
+        elif self.path == "/admin":
+            if self.check_auth():
+                self.send_response(200); self.send_header("Content-type", "text/html"); self.end_headers()
+                self.wfile.write(self.get_html(is_admin=True).encode())
+        elif self.path == "/health":
+            self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+
+    def do_POST(self):
+        # GitHub Webhook
+        if self.path == "/github-webhook":
+            length = int(self.headers['Content-Length'])
+            body = self.rfile.read(length)
+            sig = self.headers.get('X-Hub-Signature-256')
+            secret = os.getenv("GITHUB_SECRET")
+            if secret and sig:
+                mac = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+                if not hmac.compare_digest(sig, f"sha256={mac}"):
+                    self.send_response(403); self.end_headers(); return
+            
+            payload = json.loads(body)
+            if payload.get('action') == 'published':
+                asyncio.run_coroutine_threadsafe(self.broadcast_release(payload['release']), bot.loop)
+            self.send_response(200); self.end_headers(); return
+
+        # Admin Broadcast
+        if self.path == "/broadcast" and self.check_auth():
+            length = int(self.headers['Content-Length'])
+            data = parse_qs(self.rfile.read(length).decode())
+            msg = data.get('message', [''])[0]
+            if msg:
+                asyncio.run_coroutine_threadsafe(self.broadcast_dm(msg), bot.loop)
+            self.send_response(303); self.send_header('Location', '/admin?sent=1'); self.end_headers()
+
+    async def broadcast_release(self, release):
+        embed = discord.Embed(title=f"🚀 New Release: {release['tag_name']}", url=release['html_url'], color=COLOR_PRIMARY)
+        embed.description = release.get('body', 'No notes provided.')[:1000]
+        for guild in bot.guilds:
+            c = discord.utils.get(guild.text_channels, name="announcements") or guild.text_channels[0]
+            if c: await c.send(embed=embed)
+
+    async def broadcast_dm(self, text):
+        count = 0
+        for uid in list(db.dm_optins):
             try:
-                await asyncio.sleep(secs)
-                await message.author.send(f"⏰ Reminder: {reminder}")
-            except Exception:
-                await message.channel.send("❗ I couldn't DM you the reminder. Please enable DMs from server members.")
-        asyncio.create_task(send_reminder())
-        return
+                u = await bot.fetch_user(int(uid))
+                await u.send(f"📢 **Maestro Announcement**\n{text}")
+                count += 1
+                await asyncio.sleep(1)
+            except: pass
+        logger.info(f"Broadcast sent to {count} users.")
 
-    if content.lower().startswith("!poll "):
+    def get_html(self, is_admin):
+        stats = f"Users: {len(db.dm_optins)} | Servers: {len(bot.guilds)}"
+        admin_panel = ""
+        if is_admin:
+            admin_panel = f"""
+            <div class='card' style='border-top: 4px solid {parse_hex_color(COLOR_ACCENT)};'>
+                <h3>📢 Broadcast to Cohort</h3>
+                <form action='/broadcast' method='POST'>
+                    <textarea name='message' placeholder='Type announcement...' required></textarea>
+                    <button type='submit'>Send to All</button>
+                </form>
+            </div>
+            """
+        else:
+            admin_panel = f"<a href='/admin' style='color:{parse_hex_color(COLOR_PRIMARY)}'>Admin Login</a>"
+            
+        return f"""
+        <html><head><style>
+            body {{ background: {COLOR_BG}; color: white; font-family: sans-serif; text-align: center; padding: 40px; }}
+            .card {{ background: #1e293b; padding: 20px; border-radius: 10px; display: inline-block; text-align: left; min-width: 300px; }}
+            textarea {{ width: 100%; height: 100px; background: #0f172a; color: white; border: 1px solid #334155; margin: 10px 0; }}
+            button {{ background: {parse_hex_color(COLOR_PRIMARY)}; border: none; padding: 10px; width: 100%; cursor: pointer; font-weight: bold; }}
+        </style></head><body>
+            <div class='card'>
+                <h1>Maestro OS</h1>
+                <p>{stats}</p>
+                {admin_panel}
+            </div>
+        </body></html>
+        """
+
+def parse_hex_color(int_color):
+    return f"#{int_color:06x}"
+
+# ==============================================================================
+# SECTION 6: DISCORD BOT CLIENT
+# ==============================================================================
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+intents.reactions = True
+bot = discord.Client(intents=intents)
+
+async def send_chunks(channel, text):
+    """Safe sender for long AI responses."""
+    if not text:
+        return
+    if len(text) < 2000:
+        await channel.send(text)
+    else:
+        for i in range(0, len(text), 1900):
+            await channel.send(text[i:i+1900])
+            await asyncio.sleep(0.5)
+
+@bot.event
+async def on_ready():
+    logger.info(f"Discord: Online as {bot.user}")
+    await bot.change_presence(activity=discord.Game(name="!help | v3.1"))
+
+@bot.event
+async def on_member_join(member):
+    # 1. Role Assignment
+    role = discord.utils.get(member.guild.roles, name="FebruaryCohort")
+    if role:
+        try: await member.add_roles(role)
+        except: logger.error(f"Failed to assign role to {member.name}")
+    
+    # 2. Welcome DM
+    msg = (f"👋 Welcome to the cohort, {member.name}!\n"
+           "Type `!help` in the server to get started.\n"
+           "Reply with `!optin` if you want DM alerts.")
+    try: await member.send(msg)
+    except: pass
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.user_id == bot.user.id: return
+    mid = str(payload.message_id)
+    
+    # Check persistent role reactions
+    if mid in db.role_reactions:
+        guild = bot.get_guild(payload.guild_id)
+        role = discord.utils.get(guild.roles, name=db.role_reactions[mid])
+        member = payload.member or guild.get_member(payload.user_id)
+        if role and member: 
+            await member.add_roles(role)
+            logger.info(f"Role {role.name} given to {member.name}")
+            
+    # Legacy hardcoded checks (e.g. YouTube bell) can be added here if needed
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    mid = str(payload.message_id)
+    if mid in db.role_reactions:
+        guild = bot.get_guild(payload.guild_id)
+        role = discord.utils.get(guild.roles, name=db.role_reactions[mid])
+        member = guild.get_member(payload.user_id)
+        if role and member:
+            await member.remove_roles(role)
+            logger.info(f"Role {role.name} removed from {member.name}")
+
+# ==============================================================================
+# SECTION 7: COMMAND HANDLER (THE MONOLITH)
+# ==============================================================================
+@bot.event
+async def on_message(message):
+    if message.author.bot: return
+    
+    content = message.content.strip()
+    cmd = content.lower().split(" ")[0]
+    is_admin = message.author.guild_permissions.administrator
+
+    # --------------------------------------------------------------------------
+    # GROUP A: COMMUNITY & UTILITY COMMANDS
+    # --------------------------------------------------------------------------
+    if cmd == "!help":
+        embed = discord.Embed(title="Maestro Command Suite", color=COLOR_PRIMARY)
+        embed.add_field(name="🎓 Education", value="`!ask`, `!review`, `!yt`, `!resource`, `!flashcard`", inline=False)
+        embed.add_field(name="🛠️ Utilities", value="`!poll`, `!remindme`, `!dev`, `!studyhelper`", inline=False)
+        embed.add_field(name="👥 Community", value="`!optin`, `!optout`, `!earn`, `!challenge`", inline=False)
+        if is_admin:
+            embed.add_field(name="🛡️ Admin", value="`!announce`, `!dmall`, `!setup_private_role`, `!setup_py101`, `!post_in`", inline=False)
+        await message.channel.send(embed=embed)
+
+    elif cmd == "!optin":
+        db.add_optin(message.author.id)
+        await message.channel.send(f"✅ {message.author.mention} added to broadcast list.")
+
+    elif cmd == "!optout":
+        db.remove_optin(message.author.id)
+        await message.channel.send(f"✅ {message.author.mention} removed from broadcast list.")
+
+    elif cmd == "!dev":
+        embed = discord.Embed(title="Developer Profile", color=COLOR_ACCENT)
+        embed.description = f"**{DEVELOPER_NAME}**\nFull Stack Engineer & Entrepreneur.\n[Portfolio]({PORTFOLIO_LINK})"
+        embed.set_thumbnail(url="https://github.com/MacTheAnon.png")
+        await message.channel.send(embed=embed)
+
+    elif cmd == "!studyhelper":
+        # Pulls from GitHub as requested
+        repo = GITHUB_PROJECT_LINK
+        raw_url = "https://raw.githubusercontent.com/MacTheAnon/study-helper/main/README.md"
+        async with message.channel.typing():
+            try:
+                r = requests.get(raw_url)
+                text = r.text if r.status_code == 200 else "README unavailable."
+                await send_chunks(message.channel, f"🚀 **Study Helper Tool**\n🔗 <{repo}>\n\n" + text)
+            except Exception as e:
+                await message.channel.send(f"⚠️ Error fetching data: {e}")
+
+    elif cmd == "!poll":
+        # Format: !poll Question | Opt1 | Opt2
         try:
             parts = content[6:].split("|")
             question = parts[0].strip()
-            options = [opt.strip() for opt in parts[1:]]
-            if len(options) < 2 or len(options) > 5:
-                await message.channel.send("2-5 options please. Example: !poll Q | A | B")
-                return
-            poll_msg = await message.channel.send(f"📊 **{question}**\n" + "\n".join([f"{chr(0x1F1E6+i)} {o}" for i, o in enumerate(options)]))
-            emojis = [chr(0x1F1E6 + i) for i in range(len(options))]
-            for emoji in emojis:
-                await poll_msg.add_reaction(emoji)
-        except Exception:
-            await message.channel.send("Format: !poll Question | Option1 | Option2 ...")
-        return
+            options = [x.strip() for x in parts[1:]]
+            if len(options) < 2: raise ValueError
+            
+            desc = ""
+            for i, opt in enumerate(options):
+                desc += f"{chr(0x1F1E6+i)} {opt}\n"
+            
+            embed = discord.Embed(title=f"📊 {question}", description=desc, color=COLOR_SUCCESS)
+            msg = await message.channel.send(embed=embed)
+            for i in range(len(options)):
+                await msg.add_reaction(chr(0x1F1E6+i))
+        except:
+            await message.channel.send("Usage: `!poll Question | Option A | Option B`")
 
-    if content.lower() == "!help":
-        is_admin = False
-        if message.guild:
-            perms = message.author.guild_permissions
-            is_admin = perms.administrator or perms.manage_guild or perms.manage_channels or perms.kick_members
-        user_commands = [
-            "`!help` — Show this message",
-            "`!ask <question>` — Ask Maestro any coding or learning question",
-            "`!flashcard <topic>` — Practice a flashcard (DM)",
-            "`!challenge` — Get a daily quick coding challenge",
-            "`!resource <topic>` — Get learning resource links",
-            "`!review <your code>` — Get feedback on your code",
-            "`!poll Question | Option1 | Option2 ...` — Create a quick poll",
-            "`!remindme 5m Do something` — DM reminder",
-            "`!studygroup` — Start a private study group",
-            "`!yt <topic>` — Find a useful YouTube video",
-            "`!earn` — Get a learning badge",
-            "`!dev` — About the developer",
-        ]
-        admin_commands = [
-            "`!setup_py101` — Full course environment setup",
-            "`!announce Title | Description` — Post an announcement (admins only)",
-            "`!make_role Name | #color | hoist` — Admin: Create a new role",
-            "`!post_in #channel | message` — Admin: Bot posts in any channel",
-        ]
-        msg = "**🤖 Maestro Bot Help**\n\n"
-        msg += "\n".join(user_commands)
-        if is_admin:
-            msg += "\n\n**🛡️ Admin/Mod Commands:**\n"
-            msg += "\n".join(admin_commands)
-        await message.channel.send(msg)
-        return
+    elif cmd == "!remindme":
+        # Format: !remindme 5m Take out trash
+        match = re.match(r"!remindme (\d+)([mh]) (.+)", content, re.I)
+        if match:
+            val, unit, text = match.groups()
+            secs = int(val) * (60 if unit.lower() == 'm' else 3600)
+            await message.channel.send(f"⏰ Timer set for {val}{unit}.")
+            
+            # Non-blocking sleep
+            async def reminder_task(s, txt, usr):
+                await asyncio.sleep(s)
+                await message.channel.send(f"🔔 **Reminder:** {usr.mention} {txt}")
+            
+            asyncio.create_task(reminder_task(secs, text, message.author))
+        else:
+            await message.channel.send("Usage: `!remindme 10m Check server`")
 
-        # --- AI ARCHITECT (The Unlimited Engine) ---
-    if client.user.mentioned_in(message):
+    elif cmd == "!challenge":
         async with message.channel.typing():
+            prompt = "Generate a beginner Python coding challenge. No code solution, just the problem description."
+            res = await brain.query(prompt)
+            await message.channel.send(f"🧩 **Daily Challenge**\n{res}")
+
+    elif cmd == "!earn":
+        # Gamification: Assign "Learner" badge
+        role_name = "Python Learner"
+        role = discord.utils.get(message.guild.roles, name=role_name)
+        if not role:
+            try: role = await message.guild.create_role(name=role_name, color=discord.Color.gold())
+            except: pass
+        if role:
+            await message.author.add_roles(role)
+            await message.channel.send(f"🏆 {message.author.mention} has earned the **{role_name}** badge!")
+
+    elif cmd == "!flashcard":
+        topic = content[11:].strip() or "Python"
+        async with message.channel.typing():
+            res = await brain.query(f"Create a flashcard for {topic}. Format: Question: [Q] || Answer: [A].")
+            if "||" in res:
+                q, a = res.split("||")
+                try:
+                    await message.author.send(f"❓ **Flashcard ({topic})**\n{q}")
+                    await message.channel.send("📩 Check your DMs for a flashcard!")
+                except:
+                    await message.channel.send("❌ I couldn't DM you. Check privacy settings.")
+            else:
+                await message.channel.send(res)
+
+    elif cmd == "!studygroup":
+        # Creates a private voice/text channel for the user
+        cat = discord.utils.get(message.guild.categories, name="Study Groups")
+        if not cat: cat = await message.guild.create_category("Study Groups")
+        
+        c_name = f"group-{message.author.name}"
+        overwrites = {
+            message.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            message.author: discord.PermissionOverwrite(read_messages=True)
+        }
+        chan = await message.guild.create_text_channel(c_name, category=cat, overwrites=overwrites)
+        await message.channel.send(f"✅ Created study group: {chan.mention}")
+
+    # --------------------------------------------------------------------------
+    # GROUP B: AI LEARNING TOOLS
+    # --------------------------------------------------------------------------
+    elif cmd.startswith("!ask"):
+        query = content[5:].strip()
+        if not query: return await message.channel.send("Please provide a question.")
+        async with message.channel.typing():
+            response = await brain.query(query)
+            await send_chunks(message.channel, response)
+
+    elif cmd.startswith("!review"):
+        code_snippet = content[8:].strip()
+        if not code_snippet: return await message.channel.send("Please provide code.")
+        async with message.channel.typing():
+            prompt = f"Review this code for bugs and improvements:\n{code_snippet}"
+            response = await brain.query(prompt)
+            await send_chunks(message.channel, response)
+
+    elif cmd.startswith("!yt"):
+        topic = content[4:].strip()
+        async with message.channel.typing():
+            prompt = f"Provide one high-quality YouTube URL for learning: {topic}. Output ONLY the URL."
+            response = await brain.query(prompt)
+            await message.channel.send(f"📺 **Maestro Pick:** {response}")
+
+    elif cmd.startswith("!resource"):
+        topic = content[10:].strip()
+        async with message.channel.typing():
+            res = await brain.query(f"List 3 free learning resources for {topic} with URLs.")
+            await send_chunks(message.channel, res)
+
+    # --------------------------------------------------------------------------
+    # GROUP C: ADMIN & ARCHITECT TOOLS (Restricted)
+    # --------------------------------------------------------------------------
+    elif is_admin:
+        if cmd == "!setup_py101":
+            # Restored functionality: Creates full course structure
+            await message.channel.send("⏳ Initializing PY101 Course Structure...")
+            cat = await message.guild.create_category("PY101 - Python")
+            await message.guild.create_text_channel("syllabus", category=cat)
+            await message.guild.create_text_channel("homework-help", category=cat)
+            res_chan = await message.guild.create_text_channel("resources", category=cat)
+            await res_chan.send(f"📚 **Course Notes:**\n{COURSE_NOTES[:1500]}")
+            await message.channel.send("✅ Course Environment Ready.")
+
+        elif cmd.startswith("!make_role"):
+            # Format: !make_role Name | HexColor
             try:
-                prompt = message.content.replace(f'<@{client.user.id}>', '').strip()
-                response_text = await generate_response(prompt)
-                if response_text.startswith("❌ All AI systems"):
-                    await message.channel.send(
-                        "🚧 My AI brain is temporarily unavailable, but you can still use the rest of Maestro's features!"
-                    )
-                    return
+                parts = content[11:].split("|")
+                r_name = parts[0].strip()
+                r_col = discord.Color(int(parts[1].strip().replace("#", ""), 16)) if len(parts) > 1 else discord.Color.default()
+                await message.guild.create_role(name=r_name, color=r_col)
+                await message.channel.send(f"✅ Role **{r_name}** created.")
+            except:
+                await message.channel.send("Usage: `!make_role Name | #HexColor`")
 
-                if "```json" in response_text:
-                    if not message.author.guild_permissions.administrator:
-                        await message.channel.send("⛔ **Security Alert:** You are not an Admin.")
-                        return
-                    try:
-                        json_str = response_text.split("```json")[1].split("```")[0].strip()
-                        plan = json.loads(json_str)
-                        await message.channel.send(f"🛡️ **Architect Mode:** Executing *{plan['plan_name']}*...")
-                        guild = message.guild
-                        created_categories = {}
-                        for action in plan['actions']:
-                            try:
-                                overwrites = {}
-                                if 'permissions' in action:
-                                    for role_name, perms in action['permissions'].items():
-                                        target_role = None
-                                        if role_name == "@everyone":
-                                            target_role = guild.default_role
-                                        else:
-                                            target_role = discord.utils.get(guild.roles, name=role_name)
-                                        if target_role:
-                                            overwrite = discord.PermissionOverwrite(**perms)
-                                            overwrites[target_role] = overwrite
+        elif cmd.startswith("!announce"):
+            # Format: !announce Title | Body
+            try:
+                t, b = content[10:].split("|", 1)
+                embed = discord.Embed(title=t.strip(), description=b.strip(), color=COLOR_ACCENT)
+                await message.channel.send(embed=embed)
+            except:
+                await message.channel.send("Usage: `!announce Title | Description`")
 
-                                if action['type'] == 'create_role':
-                                    color = discord.Color.default()
-                                    if "color" in action:
-                                        color_str = action["color"]
-                                        try:
-                                            if color_str.startswith("#"):
-                                                color = discord.Color(int(color_str.replace("#", ""), 16))
-                                            else:
-                                                color = getattr(discord.Color, color_str.lower())()
-                                        except Exception:
-                                            pass
-                                    existing_role = discord.utils.get(guild.roles, name=action["name"])
-                                    if not existing_role:
-                                        await guild.create_role(name=action["name"], color=color)
-                                        await message.channel.send(f"🎭 Created Role: **{action['name']}**")
+        elif cmd.startswith("!dmall"):
+            msg_body = content[7:].strip()
+            count = 0
+            for uid in list(db.dm_optins):
+                try:
+                    u = await bot.fetch_user(int(uid))
+                    await u.send(f"🚨 **Admin Notice:** {msg_body}")
+                    count += 1
+                except: pass
+            await message.channel.send(f"✅ Sent to {count} users.")
 
-                                elif action['type'] == 'create_category':
-                                    cat = await guild.create_category(action['name'], overwrites=overwrites)
-                                    created_categories[action['name']] = cat
-                                    await message.channel.send(f"📂 Created: **{action['name']}**")
+        elif cmd.startswith("!dmtouser"):
+            # Format: !dmtouser @User Message
+            if message.mentions:
+                target = message.mentions[0]
+                text = content.split(f"{target.id}>")[1]
+                try:
+                    await target.send(f"📩 **Message from Admin:** {text}")
+                    await message.channel.send("✅ Sent.")
+                except: await message.channel.send("❌ Could not DM user.")
 
-                                elif action['type'] == 'create_text':
-                                    target_cat = (created_categories.get(action.get('category')) 
-                                                  or discord.utils.get(guild.categories, name=action.get('category')))
-                                    ch = await guild.create_text_channel(action['name'], category=target_cat, overwrites=overwrites)
-                                    await message.channel.send(f"💬 Created Text: **{action['name']}**")
-                                    if action.get("description"):
-                                        await ch.send(action["description"])
+        elif cmd.startswith("!post_in"):
+            # Format: !post_in #channel | message
+            match = re.search(r"<#(\d+)> \| (.+)", content)
+            if match:
+                cid, txt = match.groups()
+                c = message.guild.get_channel(int(cid))
+                if c: await c.send(txt); await message.channel.send("✅ Posted.")
+            else: await message.channel.send("Usage: `!post_in #channel | Message`")
 
-                                elif action['type'] == 'delete_channel':
-                                    chan = discord.utils.get(guild.channels, name=action['name'])
-                                    if chan:
-                                        await chan.delete()
-                                        await message.channel.send(f"🗑️ Deleted: **{action['name']}**")
-
-                                elif action['type'] == 'kick':
-                                    member = discord.utils.get(guild.members, name=action['user'])
-                                    if member:
-                                        await member.kick(reason="Maestro Bot Admin Action")
-                                        await message.channel.send(f"🥾 Kicked: **{member.name}**")
-
-                                elif action['type'] == 'reaction_role_message':
-                                    target_channel = discord.utils.get(guild.text_channels, name=action["channel"])
-                                    role_name = action.get("role")
-                                    emoji = action.get("emoji")
-                                    desc = action.get("description", "React to gain access!")
-                                    if target_channel and role_name and emoji:
-                                        msg = await target_channel.send(f"{emoji} {desc}")
-                                        await msg.add_reaction(emoji)
-                                        role_reaction_messages[msg.id] = role_name
-                                        await message.channel.send(
-                                            f"✅ Reaction role for '{role_name}' posted in {target_channel.mention}!"
-                                        )
-                                await asyncio.sleep(1)
-
-                            except Exception as e:
-                                await message.channel.send(f"⚠️ Action Failed: {e}")
-                        await message.channel.send("✅ **Execution Complete.**")
-
-                    except json.JSONDecodeError:
-                        await message.channel.send("❌ AI JSON Error. Please retry.")
-                else:
-                    await message.channel.send(response_text[:2000])
+        elif cmd.startswith("!setup_private_role"):
+            # The Complex Setup: Role + Category + Channel + Reaction Message
+            try:
+                # Format: Role | Category | Channel | Desc | Emoji
+                args = [x.strip() for x in content[19:].split("|")]
+                if len(args) < 5: raise ValueError
+                role_n, cat_n, chan_n, desc, emoji = args
+                
+                # 1. Role
+                role = discord.utils.get(message.guild.roles, name=role_n) or await message.guild.create_role(name=role_n)
+                
+                # 2. Permissions
+                overwrites = {
+                    message.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                    role: discord.PermissionOverwrite(view_channel=True)
+                }
+                
+                # 3. Channels
+                cat = discord.utils.get(message.guild.categories, name=cat_n) or await message.guild.create_category(cat_n, overwrites=overwrites)
+                chan = await message.guild.create_text_channel(chan_n, category=cat, overwrites=overwrites)
+                await chan.send(f"**Welcome to {role_n}!**\n{desc}")
+                
+                # 4. Reaction Gate
+                gate_chan = discord.utils.get(message.guild.text_channels, name="get-roles")
+                if gate_chan:
+                    gate_msg = await gate_chan.send(f"{emoji} React here to join **{role_n}**")
+                    await gate_msg.add_reaction(emoji)
+                    db.add_reaction_role(gate_msg.id, role_n)
+                    
+                await message.channel.send(f"✅ Private ecosystem setup for **{role_n}**.")
             except Exception as e:
-                await message.channel.send(f"❌ Error: {e}")
+                await message.channel.send(f"❌ Setup Error: {e}")
+
+    # --------------------------------------------------------------------------
+    # GROUP D: ARCHITECT MODE (Mention Trigger)
+    # --------------------------------------------------------------------------
+    
+    if bot.user.mentioned_in(message) and is_admin:
+        async with message.channel.typing():
+            prompt = content.replace(f"<@{bot.user.id}>", "").strip()
+            # Ask AI for JSON
+            json_response = await brain.query(prompt, architect_mode=True)
+            
+            if "```json" in json_response:
+                try:
+                    # Extract JSON block
+                    clean_json = json_response.split("```json")[1].split("```")[0].strip()
+                    plan = json.loads(clean_json)
+                    
+                    await message.channel.send(f"🏗️ **Architect Plan: {plan.get('plan_name', 'Unnamed')}**")
+                    
+                    for action in plan.get('actions', []):
+                        atype = action.get('type')
+                        aname = action.get('name')
+                        
+                        if atype == 'create_role':
+                            await message.guild.create_role(
+                                name=aname, 
+                                color=discord.Color.from_str(action.get('color', '#99aab5'))
+                            )
+                            await message.channel.send(f"🔹 Created Role: {aname}")
+                            
+                        elif atype == 'create_text':
+                            cat_name = action.get('category')
+                            cat = discord.utils.get(message.guild.categories, name=cat_name) if cat_name else None
+                            await message.guild.create_text_channel(aname, category=cat)
+                            await message.channel.send(f"🔹 Created Channel: {aname}")
+                            
+                        elif atype == 'create_category':
+                            await message.guild.create_category(aname)
+                            await message.channel.send(f"🔹 Created Category: {aname}")
+                            
+                    await message.channel.send("✅ **Execution Complete.**")
+                except Exception as e:
+                    await message.channel.send(f"⚠️ **Architect Malfunction:** {e}")
+            else:
+                # Fallback to normal chat if AI didn't return JSON
+                await send_chunks(message.channel, json_response)
+    
+    elif bot.user.mentioned_in(message) and not is_admin:
+        # Non-admin mention behavior
+        async with message.channel.typing():
+            res = await brain.query(content)
+            await send_chunks(message.channel, res)
+
+# ==============================================================================
+# SECTION 8: SYSTEM ENTRY POINT
+# ==============================================================================
 if __name__ == "__main__":
-    client.run(DISCORD_TOKEN)
+    # 1. Start Web Server Thread (Daemon)
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), DashboardHandler)
+    
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    logger.info(f"System: Dashboard active on port {port}")
+
+    # 2. Start Discord Bot (Main Thread)
+    token = os.getenv("DISCORD_TOKEN")
+    if token:
+        try:
+            bot.run(token)
+        except Exception as e:
+            logger.critical(f"System: Bot Crash: {e}")
+    else:
+        logger.critical("System: DISCORD_TOKEN missing from environment.")
