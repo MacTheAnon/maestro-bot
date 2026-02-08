@@ -1,588 +1,240 @@
 # knowledge.py
 COURSE_NOTES = """
---- GENERAL INFO ---
-MAESTRO PY101 Course notes by Kaleb McIntosh!
-What is Python?
-• A high-level, easy-to-read programming language used for web development, AI, and data analysis.
+Question / Cue Column	Notes Column: Detailed Content & Examples
+What is Python?	• High-Level Language: Designed to be human-readable, abstracting away complex computer memory management.
 
 
+• Sequential Interpretation: The Python Interpreter reads your script like a recipe, starting at Line 1. If Line 10 depends on a variable created on Line 12, the program will crash with a NameError.
+Part 1: print() & Execution	• Standard Output: print() sends data to the console (the human interface).
+
+
+• Multiple Arguments: Commas in print() act as "auto-formatters." They convert items to strings and inject a single space. 
+
+
+• Ex: print("Score:", 5) becomes "Score: 5".
+Part 2: Data Types (Numeric)	• int (Integer): Whole numbers. Memory-efficient for counting.
+
+
+• float (Floating Point): Represents real numbers with decimals. 
+
+
+• Type Promotion: If you multiply an int by a float (e.g., 5 * 1.0), Python "promotes" the result to a float (5.0) to preserve decimal precision.
+Part 3: Variables & Names	• Assignment (=): Not a math equation; it’s an action. "Take the thing on the right and shove it into the name on the left."
+
+
+• Naming Syntax: Must use snake_case (lowercase with underscores) for readability. Invalid: My Variable (spaces), 2nd_place (starts with number), class (reserved keyword).
+Part 4: Type Mismatches	• Concatenation (+): This operator is "overloaded." It does math for numbers but "glues" for strings. 
+
+
+• The Crash: If you try "Age: " + 25, Python doesn't know whether to try and turn "Age" into a number or 25 into text, so it stops (TypeError).
+Three Division Operators	• True Division (/): Always returns a float. 10 / 2 is 5.0.
+
+
+• Floor Division (//): Chops off the decimal. 11 // 3 is 3. Used for "Whole Groups."
+
+
+• Modulo (%): The "Clock Operator." It gives the remainder. 11 % 3 is 2.
+Packing & Parity Logic	• Packing Pattern: items // box_size = filled boxes; items % box_size = leftovers.
+
+
+• Parity (Even/Odd): num % 2 == 0 is Even. num % 2 != 0 is Odd.
+
+
+• Circular Logic: (current_index + 1) % total_slots moves a player to the next seat, but resets back to 0 when they reach the end.
+Traceback Anatomy	• The "Sandwich" Structure: The top is the "Header," the middle is the "Trace" (where it happened), and the bottom is the "Diagnosis" (the Error Type).
+
+
+• Reading Strategy: Start at the bottom. If it says ValueError, check the data you are trying to convert.
+Syntax vs. Runtime Errors	• SyntaxError: A "Grammar" mistake. The code never even starts running. (e.g., if x = 5: missing a second =).
+
+
+• Runtime (Type/Value): The "Logic" is okay, but the data is bad. The code starts but "trips" on a specific line.
+Comparison & Logic	• Boolean Logic: Evaluates to True or False.
+
+
+• Short-Circuiting: In an and statement, if the first part is False, Python skips the rest. In an or statement, if the first part is True, it skips the rest.
+Loops: Iteration Logic	• While Loops: Great for "Events" (e.g., while user_input != "quit":). Danger: Infinite loops occur if the condition never becomes False.
+
+
+• For Loops: Great for "Collections" (e.g., for item in grocery_list:).
+
+
+• range(start, stop, step): Note that stop is exclusive. range(1, 5) gives 1, 2, 3, 4.
+Control Flow: Break/Continue	• break: "Eject Button." Exits the loop entirely.
+
+
+• continue: "Skip Button." Jumps back to the top of the loop for the next turn.
+Functions & DRY	• DRY (Don't Repeat Yourself): If you write the same 3 lines of code twice, make it a function.
+
+
+• The Colon and Indent: Mandatory. The indented block is the "Scope" of the function.
+Parameters vs. Arguments	• Parameters: The variables defined in the function signature. The "slots."
+
+
+• Arguments: The actual data you pass into those slots during a call. The "mail."
+The Return "Output Gate"	• print vs return: print is like a billboard (you can see it, but can't use it); return is like a receipt (you get it back and can put it in a variable for later).
+
+
+• Early Return: Once return is hit, the function is dead. No code after it runs.
+Variable Scope	• Local Scope: Variables created inside a function are "born" when the function is called and "die" when it returns. They are invisible to the rest of the file.
+
+
+• Global Scope: Variables at the top level. Functions can "see" them, but shouldn't usually change them (to avoid "spaghetti code").
+Question / Cue Column	Notes Column
+What is Python?	• A high-level, easy-to-read programming language used for web development, AI, and data analysis.
 
 
 • It executes code sequentially from top to bottom.
-What is PY101?
-• The introductory course in your AAS in AI Software Engineering program.
-
-
+What is PY101?	• The introductory course in your AAS in AI Software Engineering program.
 
 
 • Covers fundamental building blocks: strings, numeric types, variables, and logic.
-Question / Cue Column
-Notes Column
-Part 1: print() & Execution
-• print() displays values or text to the console.
+Part 1: print() & Execution	• print() displays values or text to the console.
 
 
-
-
-• Execution Order: print() runs top to bottom with the rest of the code (Python executes in order).
-
-
+• Execution Order: Runs top to bottom in order.
 
 
 • Strings (text) require quotes; numbers do not.
 
 
-
-
 • Comma usage: print("Text", 5) automatically adds a space between different types.
-Part 2: Data Types (Numeric)
-• int: Whole numbers (e.g., 5).
-
-
+Part 2: Data Types (Numeric)	• int: Whole numbers (e.g., 5).
 
 
 • float: Numbers with decimals (e.g., 5.0).
 
 
-
-
 • Mixed math: If any value in a math expression is a float, the result is a float.
-Part 3: Variables & Names
-• Variable: A named "container" for storing a value using =.
-
-
+Part 3: Variables & Names	• Variable: A named "container" for storing a value using =.
 
 
 • Naming Rules: Use letters, numbers, and _. Cannot start with a number (e.g., 2snacks = Error).
 
 
-
-
 • Clarity: Use descriptive names like ticket_price to make code readable.
-Part 4: Type Mismatches
-• The + Rule: You cannot use + to join a string and a number (causes a TypeError).
-
-
+Part 4: Type Mismatches	• The + Rule: You cannot use + to join a string and a number (causes a TypeError).
 
 
 • Example: "Total: " + str(5) ✅ vs "Total: " + 5 ❌
 
 
-
-
 • Solution: Use a comma in print() to safely combine different data types.
-Part 5: Logic Modeling
-• Translate word problems into math expressions first (e.g., (Quantity * Price) + Extras).
-
-
+Part 5: Logic Modeling	• Translate word problems into math expressions first (e.g., (Quantity * Price) + Extras).
 
 
 • Inline Math: Calculations can be performed directly inside a print() call.
-Question / Cue Column
-Notes Column
-Three Division Operators
-• / (True Division): Standard division; results in a decimal (e.g., 10 / 3 → 3.33...).
-
-
+Three Division Operators	• / (True Division): Standard division; results in a decimal (e.g., 10 / 3 → 3.33...).
 
 
 • // (Floor Division): Keeps only the whole number part; "How many whole groups?" (e.g., 10 // 3 → 3).
 
 
-
-
 • % (Modulo): Returns the remainder after division.
-Key Vocabulary
-• Quotient: The result of whole-number division (a // b).
-
-
+Key Vocabulary	• Quotient: The result of whole-number division (a // b).
 
 
 • Remainder: What is left over after making full groups (a % b).
-Packing Story Pattern
-• total // size: Number of full containers (e.g., 47 muffins // 6 per box = 7 full boxes).
-
-
+Packing Story Pattern	• total // size: Number of full containers (e.g., 47 muffins // 6 per box = 7 full boxes).
 
 
 • total % size: Number of items left over (e.g., 47 muffins % 6 = 5 muffins left).
-Rebuilding Numbers
-• Original number = (quotient * size) + remainder (e.g., (7 * 6) + 5 = 47).
-Question / Cue Column
-Notes Column
-Parity Check (% 2)
-• Even: Remainder is 0 (e.g., 8 % 2 → 0).
-
-
+Rebuilding Numbers	• Original number = (quotient * size) + remainder (e.g., (7 * 6) + 5 = 47).
+Parity Check (% 2)	• Even: Remainder is 0 (e.g., 8 % 2 → 0).
 
 
 • Odd: Remainder is 1 (e.g., 13 % 2 → 1).
-Cycling with % n
-• Modulo creates a repeating loop from 0 to n-1.
+Cycling with % n	• Modulo creates a repeating loop from 0 to n-1.
 
 
-
-
-• Example: x % 4 will result in 0, 1, 2, or 3. It will never be 4.
-Real-World Cycles
-• Circular Seating: Use player_number % seat_count.
-
-
+• Example: x % 4 results in 0, 1, 2, or 3. It will never be 4.
+Real-World Cycles	• Circular Seating: Use player_number % seat_count.
 
 
 • Game Turns: Use turn % 2 to toggle between players.
 
 
-
-
 • Schedules: Use day % shift_length to rotate workers.
-Question / Cue Column
-Notes Column
-Three Core Data Types
-• str (String): Text values in quotes (e.g., "42", "Kaleb").
-
-
+Three Core Data Types	• str (String): Text values in quotes (e.g., "42", "Kaleb").
 
 
 • int (Integer): Whole numbers (e.g., 42, -5).
 
 
-
-
 • float: Decimal numbers (e.g., 3.14, 2.0).
 
 
-
-
 • Contrast: "3" * 2 → "33" (string repeat) vs 3 * 2 → 6 (math).
-
-
-
-
-• Key Concept: Quotes define a string. "42" is text; 42 is a number.
-type() Function
-• Reports the current category of a value without changing it.
-
-
+type() Function	• Reports the current category of a value without changing it.
 
 
 • Example: print(type("42")) outputs <class 'str'>.
-str() Conversion
-• Turns any value into text to allow gluing into other strings.
-
-
+str() Conversion	• Turns any value into text to allow gluing into other strings.
 
 
 • Required for concatenation: "Score: " + str(150).
-
-
-
-
-• print() with commas auto-converts: print("Score:", 150).
-int() vs float()
-• int(x): Converts numeric text into a whole number (e.g., "7" → 7).
-
-
+int() vs float()	• int(x): Converts numeric text into a whole number (e.g., "7" → 7).
 
 
 • float(x): Converts numeric text into a decimal (e.g., "7" → 7.0).
-Strong Typing Rule
-• Python will not automatically mix strings and numbers using +.
+Strong Typing Rule	• Python will not automatically mix strings and numbers using +. Text + 5 causes a crash; use text + str(5) instead.
+Variable Reassignment	• A variable's type is determined by its current assigned value, not its name. score = int(score) updates the type.
+Traceback	• Python’s report showing where and why a program crashed. It turns the code into a "glass box" to see the failure.
+The "Headline" Rule	• Always read the last line first; it contains the error type and specific reason.
+Traceback Anatomy	• Header: Indicates a crash.
 
 
+• File/Line: Exact location of error.
 
 
-• text + 5 causes a crash; use text + str(5) instead.
-Decision Workflow
-• For Math: Ensure values are int or float.
-
-
-
-
-• For Text: Convert everything to str before using +.
-Variable Reassignment
-• A variable's type is determined by its current assigned value, not its name.
-
-
-
-
-• Running score = int(score) updates the type from string to integer.
-Question / Cue Column
-Notes Column
-Traceback
-• Python’s report showing where and why a program crashed.
-
-
-
-
-• Turns the code into a "glass box" to see the internal failure.
-The "Headline" Rule
-• Always read the last line first; it contains the error type and specific reason.
-Traceback Anatomy
-• Header: Indicates a crash occurred.
-
-
-
-
-• File/Line: Pinpoints the exact location of the error.
-
-
-
-
-• Error Line: Shows the specific instruction that failed.
-
-
+• Error Line: The specific instruction that failed.
 
 
 • Arrow (^): Points to the exact character causing the issue.
-SyntaxError
-• Build-time error: Happens before the code even starts running.
+SyntaxError	• Build-time error: Code cannot start because the "shape" is invalid (missing quotes, brackets, etc.).
+TypeError	• Run-time error: Incompatible data types used together (e.g., adding string to int).
+ValueError	• Run-time error: Type is correct, but value is invalid (e.g., int("hello")).
+Week 3: Logic & Cues	Conditionals & Loops Logic
+Conditional Statement	• A line of code that checks if something is true/false. Uses if, elif, else.
+Comparison Operator	• Used to compare two values: == (equal), != (not equal), >, <, >=, <=.
+Logical Operators	• and: Both sides must be True.
 
 
+• or: At least one side must be True.
 
 
-• Cause: The "shape" of the code is invalid (e.g., missing quotes or )).
-TypeError
-• Run-time error: Occurs while the code is running.
+• not: Flips True to False and vice versa.
+Loops	• While loop: Runs while a condition is True. Best for unknown repetition counts.
 
 
+• For loop: Runs for each item in a sequence or a set number of times.
+Break vs Continue	• break: Stops the loop immediately.
 
 
-• Cause: Using incompatible data types together (e.g., adding a string to an integer).
-ValueError
-• Run-time error: The data type is correct, but the specific value is invalid (e.g., int("hello")).
-Debugging Steps
-1. Read bottom line for the error type.
+• continue: Skips the current cycle and starts the next one.
+Functions (DRY)	• DRY (Don’t Repeat Yourself): Group steps under a name to reuse code.
 
 
+• def: Keyword to define a function.
 
 
-2. Locate the error line indicated above the message.
+• return: The "output gate" that sends data back to the caller.
+Scope	• Global: Variables defined at the top level (accessible everywhere).
 
 
-
-
-3. Apply the fix (e.g., using str() for conversion or fixing parentheses).
-Question / Cue Column
-Notes Column
-1. print() differences?
-• print(x, y): Commas add spaces automatically and handle multiple types safely.
-
-
-
-
-• + Concatenation: Requires all parts to be strings; must manually add spaces and use str().
-2. Why "4" * 3 = "444"?
-• String Repetition: A string multiplied by an int repeats text rather than performing math.
-3. Real-life // and %?
-• Packing Scenario: 13 // 4 = 3 (Full boxes), 13 % 4 = 1 (Leftover muffin).
-4. Type of 19 / 2?
-• Type: float (True division always results in a float). Value: 9.5.
-5. Safe printing for 7.5?
-• print("Total:", total, "dollars") (Commas) or print("Total: " + str(total) + " dollars") (Casting).
-6. Example for int()?
-• Scenario: Math on text input. age = int("21") + 1.
-7. TypeError vs. "7" * 2?
-• TypeError is a crash (e.g., "A" + 1); repetition is a valid text operation.
-8. When to use round(x, 2)?
-• For human-readable currency (though Python displays 7.0 for 7.00).
-Types & Casting - Exam Review
-Core Conversions:
-
-
-
-
-• str(x): Turns any value into a string. Required for joining text with +.
-
-
-
-
-• int(x): Turns numeric text into a whole number (e.g., "10" → 10).
-
-
-
-
-• float(x): Turns numeric text into a decimal (e.g., "10" → 10.0).
-
-
-
-
-
-Memorize These Behaviors:
-
-
-
-
-• The "42" Trap: "42" is a string; 42 is an int.
-
-
-
-
-• String * Number: "3" * 2 results in "33" (repetition).
-
-
-
-
-• Int * Number: 3 * 2 results in 6 (math).
-
-
-
-
-• The + Rule: You cannot do "A" + 1. This causes a TypeError.
-Question / Cue Column
-Notes Column: Detailed Content
-Why use functions? (DRY)
-• Problem: Copy-pasting code (like a receipt header) leads to errors and maintenance headaches.
-
-
-
-
-• Solution: DRY (Don’t Repeat Yourself).
-
-
-
-
-• Write code once, reuse it many times by grouping steps under a single name.
-What is a function?
-• A named block of code that performs a specific task.
-
-
-
-
-• You define it once and call it whenever needed.
-
-
-
-
-• It acts like inventing a new command in Python (e.g., print_receipt_header()).
-Basic Structure
-• def: Keyword telling Python a function is being defined.
-
-
-
-
-• Function Name: Descriptive, uses snake_case, no spaces, and cannot start with a number.
-
-
-
-
-• () (Parentheses): Holds input names (parameters) or stays empty.
-
-
-
-
-• : (Colon): Required at the end of the def line.
-
-
-
-
-• Indented Body: All lines inside must be indented (usually 4 spaces) to show they belong to the function.
-Defining vs. Calling
-• Defining: Python learns and stores the instructions but does not run them yet.
-
-
-
-
-• Calling: Python jumps to the function, runs the body, then returns to the main script.
-Parameters vs. Arguments
-• Parameter: The variable name inside the function's parentheses (e.g., customer_name).
-
-
-
-
-• Argument: The actual value passed during a call (e.g., "Kaleb" or a variable like customer1).
-Parameter Practice
-• 0 Parameters: Performs the same static task every time.
-
-
-
-
-• 1 Parameter: Customizes one piece of data (e.g., a name).
-
-
-
-
-• 2 Parameters: Customizes multiple pieces (e.g., name and store name).
-Function Call Flow
-• Step 1: Main script reaches the call line.
-
-
-
-
-• Step 2: Python jumps to the function and assigns argument values to parameters.
-
-
-
-
-• Step 3: The indented body runs line by line.
-
-
-
-
-• Step 4: Python returns to the main script where it left off.
-Question / Cue Column
-Notes Column: Detailed Content
-What is a function?
-• A reusable block of code that has a name, can take inputs, runs a set of steps, and can hand back a result.
-Function Definition Syntax
-• Defined with the def keyword followed by the function name, parameters in parentheses, and a colon.
-
-
-
-
-• The indented block under the def line is the body.
-Parameters vs. Arguments
-• Parameters: Placeholder names in the function definition (e.g., price, tax_amount).
-
-
-
-
-• Arguments: The actual values passed during a call (e.g., add_tax(50, 8)).
-
-
-
-
-• Positional Binding: Python matches arguments to parameters by their order.
-The return Keyword
-• Acts as the function’s "output gate" that sends a value back to the caller.
-
-
-
-
-• Once hit, Python leaves the function and hands the value back to be stored in a variable.
-Execution Flow & Tracing
-• Standard Flow: Caller line → Function body (line by line) → return → Back to caller.
-
-
-
-
-• Tracing: Using print() messages before, inside, and after a call to verify execution order and variable values.
-Question / Cue Column
-Notes Column: Detailed Content
-Key Vocabulary
-• Function: A reusable block of code that executes when called.
-
-
-
-
-• print(): Displays text for humans; does not hand data back to the program.
-
-
-
-
-• return: The "output gate" that sends a value to the caller and instantly stops the function.
-
-
-
-
-• Return Value: Data handed back by return that can be stored in a variable.
-
-
-
-
-• Bare Return: A return with no value that exits a function early, giving back None.
-print() vs. return
-• print() = Side effect for humans (console output).
-
-
-
-
-• return = Data output for code (reusable, storable).
-
-
-
-
-• Rule: You see print on the screen; you use return in your logic.
-Sending vs. Receiving
-• Sender (Inside function): return something.
-
-
-
-
-• Receiver (Outside function): result = my_func(...).
-
-
-
-
-• These must work as a pair to use the value later in your script.
-The "Early Return" Rule
-• When Python hits a return, it skips all lines below it inside that function.
-
-
-
-
-• This applies to both specific values (e.g., return 5) and bare returns.
-Multiple return Lines
-• You can have multiple return statements, but only the first one executed runs; all subsequent code is ignored.
-Questions / Terms
-Notes
-Term: Scope
-• Defines where a variable's name is valid and usable in a program.
-
-
-
-
-• Focuses on local scope (inside functions) and global scope (top-level file).
-Global Scope / Variables
-• Defined at the top level of the file, outside all functions.
-
-
-
-
-• Exists for the entire duration the program runs.
-
-
-
-
-• Can be read inside functions unless "shadowed" by a local variable with the same name.
-Local Scope / Variables
-• Created inside a function body and exists only while the function is running.
-
-
-
-
-• Lifecycle: Created at function entry and destroyed when the function returns.
-
-
-
-
-• Attempting to use a local variable outside its function results in a NameError.
-Python's Lookup Rule
-• When a name is used inside a function, Python looks in the Local scope first.
-
-
-
-
-• If not found locally, it falls back to the Global scope.
-Term: Shadowing
-• Occurs when a local variable shares the same name as a global variable, hiding the global one inside the function.
-
-
-
-
-• Changes to the local variable do not affect the global variable.
-Term: Parameter
-• A variable name in a function definition that receives a value (argument) when called.
-
-
-
-
-• Parameters are local variables that exist only inside the function.
-The "Good Habit" Path
-• Prefer using parameters to bring data in and return to send data out.
-
-
-
-
-• This makes code more reusable, testable, and predictable compared to overusing globals.
-
- SUMMARY: In the first two weeks of PY101, I mastered the essential grammar of Python. I learned that Python is a strongly typed, sequential language where data must be explicitly converted (casting) to interact correctly. I utilized the division family (/, //, %) to model real-world packing and cycling problems.
-The core of my progress involved moving from simple scripts to functional programming. By following the DRY principle, I can define reusable logic using def. I established a clear mental model for Scope: understanding that Parameters and Local Variables are private to their functions, while Global Variables persist across the file. Finally, I learned that while print() communicates with humans, the return statement is the critical "output gate" that allows functions to pass data back into the main program for storage and further use.
- 
- 
- 
- 
+• Local: Variables created inside a function (deleted when function ends).
  
 
+
+
+
+
+
+
+
+
+
+
+SUMMARY: In the first three weeks of PY101, I mastered the essential grammar of Python. I learned that Python is a strongly typed, sequential language where data must be explicitly converted (casting) to interact correctly. I utilized the division family (/, //, %) to model real-world packing and cycling problems. Moving into Week 3, I transitioned from simple scripts to functional programming. By following the DRY principle, I can define reusable logic using def. I established a clear mental model for Scope: understanding that Parameters and Local Variables are private to their functions, while Global Variables persist across the file. Finally, I learned that while print() communicates with humans, the return statement is the critical "output gate" that allows functions to pass data back into the main program for storage and further use.
 
 """
