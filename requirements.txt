@@ -2,5 +2,3 @@ discord.py
 google-generativeai
 openai
 groq
-
-
