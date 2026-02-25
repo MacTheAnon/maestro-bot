@@ -418,36 +418,56 @@ async def on_message(message):
 
         if is_admin:
             async with message.channel.typing():
-                json_response = await brain.query(prompt, architect_mode=True)
-                if "```json" in json_response:
-                    try:
-                        clean_json = json_response.split("```json")[1].split("```")[0].strip()
-                        plan = json.loads(clean_json)
-                        await message.channel.send(f"🏗️ **Architect Plan: {plan.get('plan_name', 'Unnamed')}**")
+                # Only trigger Architect Mode if the prompt contains server-action keywords.
+                # Otherwise treat it as normal AI chat, even for admins.
+                architect_keywords = [
+                    "create", "make", "add", "setup", "build", "set up",
+                    "delete", "remove", "rename", "configure", "generate"
+                ]
+                is_architect_request = any(kw in prompt.lower() for kw in architect_keywords)
 
-                        for action in plan.get('actions', []):
-                            atype = action.get('type')
-                            aname = action.get('name')
-                            if atype == 'create_role':
-                                await message.guild.create_role(
-                                    name=aname,
-                                    color=discord.Color.from_str(action.get('color', '#99aab5'))
-                                )
-                                await message.channel.send(f"🔹 Created Role: **{aname}**")
-                            elif atype == 'create_text':
-                                cat = discord.utils.get(message.guild.categories, name=action.get('category'))
-                                await message.guild.create_text_channel(aname, category=cat)
-                                await message.channel.send(f"🔹 Created Channel: **{aname}**")
-                            elif atype == 'create_category':
-                                await message.guild.create_category(aname)
-                                await message.channel.send(f"🔹 Created Category: **{aname}**")
+                if is_architect_request:
+                    json_response = await brain.query(prompt, architect_mode=True)
+                    if "```json" in json_response:
+                        try:
+                            clean_json = json_response.split("```json")[1].split("```")[0].strip()
+                            plan = json.loads(clean_json)
+                            actions = plan.get('actions', [])
 
-                        await message.channel.send("✅ **Execution Complete.**")
-                    except Exception as e:
-                        await message.channel.send(f"⚠️ **Architect Malfunction:** {e}")
+                            if not actions:
+                                # AI returned JSON but with no actions — fall back to chat
+                                await message.channel.send(json_response[:2000])
+                                return
+
+                            await message.channel.send(f"🏗️ **Architect Plan: {plan.get('plan_name', 'Unnamed')}**")
+                            for action in actions:
+                                atype = action.get('type')
+                                aname = action.get('name')
+                                if atype == 'create_role':
+                                    await message.guild.create_role(
+                                        name=aname,
+                                        color=discord.Color.from_str(action.get('color', '#99aab5'))
+                                    )
+                                    await message.channel.send(f"🔹 Created Role: **{aname}**")
+                                elif atype == 'create_text':
+                                    cat = discord.utils.get(message.guild.categories, name=action.get('category'))
+                                    await message.guild.create_text_channel(aname, category=cat)
+                                    await message.channel.send(f"🔹 Created Channel: **{aname}**")
+                                elif atype == 'create_category':
+                                    await message.guild.create_category(aname)
+                                    await message.channel.send(f"🔹 Created Category: **{aname}**")
+                            await message.channel.send("✅ **Execution Complete.**")
+                        except Exception as e:
+                            await message.channel.send(f"⚠️ **Architect Malfunction:** {e}")
+                    else:
+                        # AI responded with plain text instead of JSON — just show it
+                        chunks = [json_response[i:i+2000] for i in range(0, len(json_response), 2000)]
+                        for chunk in chunks:
+                            await message.channel.send(chunk)
                 else:
-                    # Fallback: normal AI chat for admin mentions
-                    chunks = [json_response[i:i+2000] for i in range(0, len(json_response), 2000)]
+                    # Casual message or question — skip architect mode entirely
+                    res = await brain.query(prompt)
+                    chunks = [res[i:i+2000] for i in range(0, len(res), 2000)]
                     for chunk in chunks:
                         await message.channel.send(chunk)
         else:
