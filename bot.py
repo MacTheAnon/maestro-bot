@@ -134,7 +134,10 @@ class AIEngine:
             f"You are Maestro Bot. Version {VERSION}. "
             f"Knowledge Base: {COURSE_NOTES[:2000]}... "
             "Persona: Professor, Architect, Senior Engineer. "
-            "If asked to modify server, output ONLY JSON."
+            "IMPORTANT: Only output a JSON Action Plan if the user is explicitly asking you to "
+            "modify the Discord server (e.g. create roles, channels, categories). "
+            "For all other messages — questions, greetings, code help, etc. — respond in plain conversational text. "
+            "Never output JSON for casual conversation or learning questions."
         )
 
     async def query(self, prompt, architect_mode=False):
@@ -418,9 +421,10 @@ async def on_message(message):
 
         if is_admin:
             async with message.channel.typing():
-                # Always query as normal chat first.
-                # Only execute as Architect if the AI explicitly returns a JSON block with actions.
-                response = await brain.query(prompt)
+                # Send with architect_mode=True so the AI knows it CAN return JSON for server actions.
+                # But we only EXECUTE if the response actually contains a JSON block with actions.
+                # If the AI decides the message is casual, it will return plain text and we just show it.
+                response = await brain.query(prompt, architect_mode=True)
 
                 if "```json" in response:
                     try:
