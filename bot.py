@@ -355,7 +355,134 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """
 
 # ==============================================================================
-# SECTION 7: EVENT LISTENERS
+# SECTION 7: SCAM SNIFFER ENGINE
+# ==============================================================================
+# Phrase patterns that strongly indicate a scam message.
+# All checks are case-insensitive. Add more patterns here as needed.
+SCAM_PATTERNS = [
+    # Giveaway / free gear scams
+    r"\bfree\s+(camera|laptop|iphone|macbook|pc|gpu|playstation|ps5|xbox|airpods|ipad|gift\s*card)\b",
+    r"\bgiving\s+away\b",
+    r"\bgiveaway\b.*\b(dm|message|click|link)\b",
+
+    # "I don't need this anymore" bait
+    r"\bdon['\u2019]?t\s+need\s+(it|this|my)\s+anymore\b",
+    r"\bno\s+longer\s+need\b",
+
+    # Crypto / investment scams
+    r"\b(invest|profit|earning|passive\s+income)\b.{0,40}\b(crypto|bitcoin|btc|eth|usdt|forex)\b",
+    r"\bdouble\s+your\s+(money|bitcoin|crypto|investment)\b",
+    r"\b(100|200|300|500)x\s+(return|profit|gain)\b",
+    r"\bguaranteed\s+(profit|return|income)\b",
+
+    # Phishing / account scams
+    r"\bverif(y|ication)\s+your\s+(discord|account|steam|paypal)\b",
+    r"\byour\s+account\s+(has\s+been|will\s+be)\s+(suspended|banned|flagged|terminated)\b",
+    r"\bclick\s+(this|the)\s+(link|button)\s+to\s+(claim|verify|receive|get)\b",
+    r"\bsteam\s+(gift|free\s+game|wallet)\b",
+
+    # Suspicious TLD link patterns
+    r"https?://(?!discord\.com|discord\.gg|github\.com|youtube\.com|youtu\.be)[a-z0-9\-]+\.(xyz|tk|ml|ga|cf|gq|ru|top|click|loan|work|download)\b",
+
+    # Nitro scams
+    r"\bfree\s+nitro\b",
+    r"\bnitro\s+giveaway\b",
+    r"\bdiscord\s+nitro\s+(for\s+free|free)\b",
+
+    # Job / money mule scams
+    r"\bearn\s+\$?\d+\s+(a\s+day|per\s+day|daily|weekly|a\s+week)\b",
+    r"\bwork\s+from\s+home\b.{0,40}\b(earn|make|income)\b",
+    r"\bno\s+experience\s+(needed|required)\b",
+
+    # General urgency bait
+    r"\b(limited\s+time|act\s+now|only\s+\d+\s+left|expires?\s+soon)\b",
+    r"\bdm\s+me\s+(for\s+)?(details|info|more|the\s+link)\b",
+]
+
+# Compile all patterns once at startup for performance
+_SCAM_REGEX = re.compile("|".join(SCAM_PATTERNS), re.IGNORECASE | re.UNICODE)
+
+# Channel name to post scam alerts in (must exist in your server)
+SCAM_LOG_CHANNEL = "mod-log"
+
+async def scam_sniffer(message: discord.Message) -> bool:
+    """
+    Scans a message for scam patterns.
+    If detected: deletes the message, bans the user, and logs to mod-log.
+    Returns True if a scam was detected, False otherwise.
+    Admins and bots are always exempt.
+    """
+    if message.author.bot:
+        return False
+    if message.author.guild_permissions.administrator:
+        return False
+
+    content = message.content
+
+    # Also scan embed text (common in link previews)
+    for embed in message.embeds:
+        if embed.title:       content += " " + embed.title
+        if embed.description: content += " " + embed.description
+        if embed.url:         content += " " + embed.url
+
+    if not _SCAM_REGEX.search(content):
+        return False
+
+    matched = _SCAM_REGEX.search(content).group(0)
+    guild  = message.guild
+    author = message.author
+
+    logger.warning(f"SCAM DETECTED | User: {author} ({author.id}) | Match: '{matched}' | Msg: {content[:100]}")
+
+    # 1. Delete the message
+    try:
+        await message.delete()
+    except discord.Forbidden:
+        logger.error("Scam Sniffer: Missing permission to delete messages.")
+    except discord.NotFound:
+        pass
+
+    # 2. Ban the user
+    try:
+        await guild.ban(
+            author,
+            reason=f"[Maestro AutoMod] Scam detected. Trigger: '{matched}'",
+            delete_message_days=1
+        )
+        logger.info(f"Scam Sniffer: Banned {author} ({author.id})")
+    except discord.Forbidden:
+        logger.error("Scam Sniffer: Missing permission to ban members.")
+    except Exception as e:
+        logger.error(f"Scam Sniffer: Ban failed: {e}")
+
+    # 3. Log to mod-log channel
+    log_chan = discord.utils.get(guild.text_channels, name=SCAM_LOG_CHANNEL)
+    if log_chan:
+        embed = discord.Embed(
+            title="🚨 Scam Message Auto-Removed",
+            color=COLOR_ERROR,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="User",           value=f"{author.mention} (`{author.id}`)", inline=True)
+        embed.add_field(name="Channel",        value=message.channel.mention,              inline=True)
+        embed.add_field(name="Trigger Phrase", value=f"`{matched}`",                       inline=False)
+        embed.add_field(
+            name="Message Preview",
+            value=f"```{message.content[:300]}```" if message.content else "*No text content*",
+            inline=False
+        )
+        embed.set_footer(text="Action: Message deleted | User banned")
+        try:
+            await log_chan.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Scam Sniffer: Could not post to mod-log: {e}")
+    else:
+        logger.warning(f"Scam Sniffer: No '{SCAM_LOG_CHANNEL}' channel found for logging.")
+
+    return True
+
+# ==============================================================================
+# SECTION 8: EVENT LISTENERS
 # ==============================================================================
 @bot.event
 async def on_ready():
@@ -407,6 +534,10 @@ async def on_raw_reaction_remove(payload):
 @bot.event
 async def on_message(message):
     if message.author.bot:
+        return
+
+    # Run scam sniffer first — if it fires, stop processing the message entirely
+    if message.guild and await scam_sniffer(message):
         return
 
     # FIX: process_commands is still needed for any future prefix commands
@@ -526,7 +657,7 @@ async def cmd_help(interaction: discord.Interaction):
     if is_admin:
         embed.add_field(
             name="🛡️ Admin",
-            value="`/kick`, `/ban`, `/make_role`, `/announce`, `/dmall`, `/dmtouser`, `/setup_py101`, `/setup_private_role`, `/post_in`",
+            value="`/kick`, `/ban`, `/unban`, `/make_role`, `/announce`, `/dmall`, `/dmtouser`, `/setup_py101`, `/setup_private_role`, `/post_in`, `/scam_test`",
             inline=False
         )
     embed.set_footer(text=f"Maestro v{VERSION} | {BRAND_NAME}")
@@ -828,6 +959,36 @@ async def cmd_setup_private_role(
     except Exception as e:
         logger.error(f"setup_private_role error: {e}")
         await interaction.followup.send(f"❌ Setup Error: {e}")
+
+
+@bot.tree.command(name="unban", description="Unban a user by their ID")
+@app_commands.default_permissions(ban_members=True)
+async def cmd_unban(interaction: discord.Interaction, user_id: str, reason: str = "Manual unban by admin"):
+    try:
+        user = await bot.fetch_user(int(user_id))
+        await interaction.guild.unban(user, reason=reason)
+        await interaction.response.send_message(f"✅ Unbanned **{user}** (`{user_id}`).")
+    except discord.NotFound:
+        await interaction.response.send_message("❌ User not found or is not banned.", ephemeral=True)
+    except ValueError:
+        await interaction.response.send_message("❌ Invalid user ID. Must be a numeric Discord ID.", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ I don't have permission to unban members.", ephemeral=True)
+
+@bot.tree.command(name="scam_test", description="Test a message against the scam sniffer without taking action")
+@app_commands.default_permissions(administrator=True)
+async def cmd_scam_test(interaction: discord.Interaction, text: str):
+    match = _SCAM_REGEX.search(text)
+    if match:
+        await interaction.response.send_message(
+            f"🚨 **SCAM DETECTED**\nTrigger phrase: `{match.group(0)}`\nThis message would be deleted and the user banned.",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "✅ **Clean** — No scam patterns detected in that message.",
+            ephemeral=True
+        )
 
 # ==============================================================================
 # SECTION 9: SYSTEM ENTRY POINT
